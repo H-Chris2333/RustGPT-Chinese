@@ -1,6 +1,6 @@
 # 🦀 RustGPT-Chinese - 从零开始构建大语言模型
 
-[![Check](https://github.com/simfg/RustGPT-Chinese/actions/workflows/check.yml/badge.svg)](https://github.com/simfg/RustGPT-Chinese/actions/workflows/check.yml) [![Test](https://github.com/simfg/RustGPT-Chinese/actions/workflows/test.yml/badge.svg)](https://github.com/simfg/RustGPT-Chinese/actions/workflows/test.yml)
+[![Check](https://github.com/H-Chris233/RustGPT-Chinese/actions/workflows/check.yml/badge.svg)](https://github.com/H-Chris233/RustGPT-Chinese/actions/workflows/check.yml) [![Test](https://github.com/H-Chris233/RustGPT-Chinese/actions/workflows/test.yml/badge.svg)](https://github.com/H-Chris233/RustGPT-Chinese/actions/workflows/test.yml)
 
 这是一个专门用于中文语言处理的**大型语言模型实现**，使用纯 Rust 构建，不依赖任何外部的机器学习框架。完全基于 `ndarray` 实现矩阵运算。
 
@@ -14,7 +14,7 @@
 - **完整反向传播**：包含梯度裁剪
 - **模块化架构**：清晰的关注点分离
 
-## ❌ 项目不是
+## ❌ 项目不是:
 
 这不是一个生产级别的大语言模型，距离大型模型还很远。
 
@@ -79,7 +79,7 @@ tests/
 
 ```bash
 # 克隆并运行
-git clone https://github.com/simfg/RustGPT-Chinese.git
+git clone https://github.com/H-Chris233/RustGPT-Chinese.git
 cd RustGPT-Chinese
 cargo run
 
