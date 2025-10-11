@@ -9,11 +9,18 @@ A complete **Chinese-only Large Language Model implementation in pure Rust** wit
 ## 🚀 What This Is
 
 This project demonstrates how to build a transformer-based language model from scratch in Rust that is specialized for Chinese language processing, including:
+
 - **Pre-training** on Chinese factual text completion
 - **Instruction tuning** for Chinese conversational AI
 - **Interactive chat mode** for Chinese language testing
 - **Full backpropagation** with gradient clipping
 - **Modular architecture** with clean separation of concerns
+- **Chinese-optimized tokenizer** using jieba-rs
+- **Multi-head self-attention mechanism** for better Chinese grammar understanding
+- **Context window management** for maintaining conversation history
+- **Advanced decoding methods** (top-k/top-p sampling, beam search)
+- **Regularization techniques** (Dropout) for improved stability
+- **Semantic enhancement** for better understanding of Chinese relationships
 
 ## ❌ What This Isn't
 
@@ -26,7 +33,7 @@ This is just a toy project that demonstrates how Chinese LLMs work under the hoo
 Start with these two core files to understand the implementation:
 
 - **[`src/main.rs`](src/main.rs)** - Training pipeline, data preparation, and interactive mode
-- **[`src/llm.rs`](src/llm.rs)** - Core LLM implementation with forward/backward passes and training logic
+- **[`src/llm.rs`](src/llm.rs)** - Core LLM implementation and training logic
 
 ## 🏗️ Architecture
 
@@ -46,21 +53,13 @@ src/
 ├── transformer.rs       # 🔄 Transformer block (attention + feed-forward)
 ├── self_attention.rs    # 👀 Multi-head self-attention mechanism
 ├── feed_forward.rs      # ⚡ Position-wise feed-forward networks
-├── embeddings.rs        # 📊 Token embedding layer
+├── embeddings.rs        # 📊 Token embedding layer with semantic enhancement
 ├── output_projection.rs # 🎰 Final linear layer for vocabulary predictions
-├── vocab.rs            # 📝 Vocabulary management and tokenization
+├── vocab.rs            # 📝 Vocabulary management and jieba-rs tokenization
 ├── layer_norm.rs       # 🧮 Layer normalization
-└── adam.rs             # 🏃 Adam optimizer implementation
-
-tests/
-├── llm_test.rs         # Tests for core LLM functionality
-├── transformer_test.rs # Tests for transformer blocks
-├── self_attention_test.rs # Tests for attention mechanisms
-├── feed_forward_test.rs # Tests for feed-forward layers
-├── embeddings_test.rs  # Tests for embedding layers
-├── vocab_test.rs       # Tests for vocabulary handling
-├── adam_test.rs        # Tests for optimizer
-└── output_projection_test.rs # Tests for output layer
+├── dropout.rs          # 🚫 Dropout regularization
+├── position_encoding.rs # 📍 Position encoding optimized for Chinese
+└── semantic_enhancer.rs # 🔍 Semantic relationship enhancement for Chinese
 ```
 
 ## 🧪 What The Model Learns
@@ -71,10 +70,12 @@ The implementation includes two training phases specialized for Chinese:
    - "太阳从东方升起，在西方落下"
    - "水由于重力而从高处流向低处"
    - "山脉是高大而多岩石的地形"
+   - Enhanced with Chinese cultural knowledge, idioms, and historical facts
 
 2. **Instruction Tuning**: Learns Chinese conversational patterns
-   - "用户：山脉是如何形成的？助手：山脉通过构造力或火山活动形成..."
+   - "用户：山脉是如何形成的？助手：山脉通过构造力或火山活动在长时间的地质时期内形成..."
    - Handles Chinese greetings, explanations, and follow-up questions
+   - Incorporates Chinese cultural references and idioms
 
 ## 🚀 Quick Start
 
@@ -85,7 +86,7 @@ cd RustGPT-Chinese
 cargo run
 
 # The model will:
-# 1. Build vocabulary from Chinese training data
+# 1. Build vocabulary from Chinese training data (with jieba-rs tokenization)
 # 2. Pre-train on Chinese factual statements (100 epochs)
 # 3. Instruction-tune on Chinese conversational data (100 epochs)
 # 4. Enter interactive mode for Chinese testing
@@ -106,25 +107,29 @@ Model output: 降雨是由云中的水蒸气凝结成水滴，当水滴变得太
 ## 🧮 Technical Implementation
 
 ### Model Configuration
-- **Vocabulary Size**: Dynamic (built from training data)
-- **Embedding Dimension**: 128 (defined by `EMBEDDING_DIM` in `src/lib.rs`)
-- **Hidden Dimension**: 256 (defined by `HIDDEN_DIM` in `src/lib.rs`)
-- **Max Sequence Length**: 80 tokens (defined by `MAX_SEQ_LEN` in `src/lib.rs`)
-- **Architecture**: 3 Transformer blocks + embeddings + output projection
+- **Vocabulary Size**: Dynamic (built from training data with jieba-rs integration)
+- **Embedding Dimension**: 512 (enhanced from original 128 to better represent Chinese characters)
+- **Hidden Dimension**: 1024 (enhanced from original 256 for complex Chinese patterns)
+- **Max Sequence Length**: 256 tokens (increased from original 80 for longer Chinese sentences)
+- **Architecture**: 4 Transformer blocks + embeddings + output projection
 
 ### Training Details
 - **Optimizer**: Adam with gradient clipping
-- **Pre-training LR**: 0.0005 (100 epochs)
-- **Instruction Tuning LR**: 0.0001 (100 epochs)
+- **Pre-training LR**: 0.0005 (100 epochs with decay scheduling)
+- **Instruction Tuning LR**: 0.0001 (100 epochs with decay scheduling)
 - **Loss Function**: Cross-entropy loss
 - **Gradient Clipping**: L2 norm capped at 5.0
+- **Regularization**: Dropout layers with 10% rate after attention and feed-forward
 
 ### Key Features
-- **Custom tokenization** with punctuation handling
-- **Greedy decoding** for text generation
+- **Custom Chinese tokenization** with jieba-rs for accurate Chinese text processing
+- **Multi-head self-attention** with 8 heads for better Chinese grammar understanding
+- **Greedy and advanced decoding** (top-p sampling with p=0.9, beam search)
 - **Gradient clipping** for training stability
 - **Modular layer system** with clean interfaces
 - **Comprehensive test coverage** for all components
+- **Context window management** for maintaining conversation history
+- **Semantic enhancement** for understanding Chinese word relationships
 
 ## 🔧 Development
 
@@ -150,15 +155,20 @@ This implementation demonstrates key ML concepts for Chinese language models:
 - **Transformer architecture** (attention, feed-forward, layer norm)
 - **Backpropagation** through neural networks
 - **Chinese language model training** (pre-training + fine-tuning)
-- **Chinese tokenization** and vocabulary management
+- **Chinese tokenization** and vocabulary management with jieba-rs
 - **Gradient-based optimization** with Adam
+- **Context management** for conversation history
+- **Regularization techniques** for improved stability
 
 Perfect for understanding how Chinese LLMs work under the hood!
 
 ## 📊 Dependencies
 
 - `ndarray` - N-dimensional arrays for matrix operations
+- `jieba-rs` - Chinese text segmentation and tokenization
 - `rand` + `rand_distr` - Random number generation for initialization
+- `regex` - Pattern matching for Chinese idioms recognition
+- `bincode` - Serialization and binary encoding
 
 No PyTorch, TensorFlow, or Candle - just pure Rust and linear algebra!
 

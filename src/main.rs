@@ -1,3 +1,6 @@
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+
 use std::io::Write;
 
 use ::llm::{EMBEDDING_DIM, HIDDEN_DIM, MAX_SEQ_LEN};
@@ -47,6 +50,7 @@ fn main() {
     let transformer_block_1 = TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM);
     let transformer_block_2 = TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM);
     let transformer_block_3 = TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM);
+    let transformer_block_4 = TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM); // Added extra transformer block for better Chinese understanding
     let output_projection = OutputProjection::new(EMBEDDING_DIM, vocab.words.len());
     let embeddings = Embeddings::new(vocab.clone());
     let mut llm = LLM::new(
@@ -56,6 +60,7 @@ fn main() {
             Box::new(transformer_block_1),
             Box::new(transformer_block_2),
             Box::new(transformer_block_3),
+            Box::new(transformer_block_4),  // Added the fourth transformer block
             Box::new(output_projection),
         ],
     );
@@ -93,7 +98,7 @@ fn main() {
         .map(|s| s.as_str())
         .collect();
 
-    llm.train(pretraining_examples, 100, 0.0005);
+    llm.train(pretraining_examples, 100, 0.0005); // Pre-training with learning rate scheduling
 
     println!("\n=== INSTRUCTION TUNING ===");
     println!(
@@ -103,7 +108,7 @@ fn main() {
         0.0001
     );
 
-    llm.train(chat_training_examples, 100, 0.0001); // Much lower learning rate for stability
+    llm.train(chat_training_examples, 100, 0.0001); // Instruction tuning with learning rate scheduling
 
     println!("\n=== AFTER TRAINING ===");
     println!("Input: {}", string);
@@ -139,7 +144,8 @@ fn main() {
 
         // Generate prediction based on user input with "User:" prefix
         let formatted_input = format!("User: {}", trimmed_input);
-        let prediction = llm.predict(&formatted_input);
+        // Use context-aware prediction for more coherent conversations
+        let prediction = llm.predict_with_context(&formatted_input, 1.0, 0.9, 5);
         println!("Model output: {}", prediction);
     }
 }

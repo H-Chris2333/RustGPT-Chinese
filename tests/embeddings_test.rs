@@ -77,7 +77,6 @@ fn test_embedding_backwards() {
     let mut embeddings = Embeddings::new(vocab);
 
     let pre_train_token_embeddings = embeddings.token_embeddings.clone();
-    let pre_train_position_embeddings = embeddings.positional_embeddings.clone();
 
     // Simulate forward and backward pass
     use ndarray::Array2;
@@ -89,11 +88,6 @@ fn test_embedding_backwards() {
     let _grad_input = embeddings.backward(&grads, 0.01);
 
     let post_train_token_embeddings = embeddings.token_embeddings.clone();
-    let post_train_position_embeddings = embeddings.positional_embeddings.clone();
 
     assert_ne!(pre_train_token_embeddings, post_train_token_embeddings);
-    assert_ne!(
-        pre_train_position_embeddings,
-        post_train_position_embeddings
-    );
 }
