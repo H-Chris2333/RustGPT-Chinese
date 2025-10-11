@@ -2,7 +2,7 @@
 
 [![Check](https://github.com/H-Chris233/RustGPT-Chinese/actions/workflows/check.yml/badge.svg)](https://github.com/H-Chris233/RustGPT-Chinese/actions/workflows/check.yml) [![Test](https://github.com/H-Chris233/RustGPT-Chinese/actions/workflows/test.yml/badge.svg)](https://github.com/H-Chris233/RustGPT-Chinese/actions/workflows/test.yml)
 
-**[中文文档](README_zh.md) | [中文文档](README_zh.md)**
+**[中文！](README_zh.md)**
 
 A complete **Chinese-only Large Language Model implementation in pure Rust** with no external ML frameworks. Built from the ground up using only `ndarray` for matrix operations.
 

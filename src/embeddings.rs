@@ -1,4 +1,4 @@
-use ndarray::{Array2, s};
+use ndarray::Array2;
 use rand_distr::{Distribution, Normal};
 
 use crate::{EMBEDDING_DIM, MAX_SEQ_LEN, adam::Adam, llm::Layer, position_encoding::PositionEncoding, semantic_enhancer::SemanticEnhancer, vocab::Vocab};

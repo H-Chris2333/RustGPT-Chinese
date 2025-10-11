@@ -13,11 +13,14 @@ use crate::{
 
 mod adam;
 mod dataset_loader;
+mod dropout;
 mod embeddings;
 mod feed_forward;
 mod layer_norm;
 mod llm;
 mod output_projection;
+mod position_encoding;
+mod semantic_enhancer;
 mod self_attention;
 mod transformer;
 mod vocab;
