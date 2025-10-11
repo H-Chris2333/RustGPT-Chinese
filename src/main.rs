@@ -27,7 +27,7 @@ mod vocab;
 
 fn main() {
     // Mock input - test conversational format
-    let string = String::from("User: How do mountains form?");
+    let string = String::from("用户：山脉是如何形成的？");
 
     let dataset = Dataset::new(
         String::from("data/pretraining_data.json"),
