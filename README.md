@@ -1,26 +1,26 @@
-# 🦀 Rust LLM from Scratch
+# 🦀 RustGPT-Chinese - Chinese-Only LLM
 
-[![Check](https://github.com/tekaratzas/RustGPT/actions/workflows/check.yml/badge.svg)](https://github.com/tekaratzas/RustGPT/actions/workflows/check.yml) [![Test](https://github.com/tekaratzas/RustGPT/actions/workflows/test.yml/badge.svg)](https://github.com/tekaratzas/RustGPT/actions/workflows/test.yml)
+[![Check](https://github.com/simfg/RustGPT-Chinese/actions/workflows/check.yml/badge.svg)](https://github.com/simfg/RustGPT-Chinese/actions/workflows/check.yml) [![Test](https://github.com/simfg/RustGPT-Chinese/actions/workflows/test.yml/badge.svg)](https://github.com/simfg/RustGPT-Chinese/actions/workflows/test.yml)
 
 
 https://github.com/user-attachments/assets/ec4a4100-b03a-4b3c-a7d6-806ea54ed4ed
 
-A complete **Large Language Model implementation in pure Rust** with no external ML frameworks. Built from the ground up using only `ndarray` for matrix operations.
+A complete **Chinese-only Large Language Model implementation in pure Rust** with no external ML frameworks. Built from the ground up using only `ndarray` for matrix operations.
 
 ## 🚀 What This Is
 
-This project demonstrates how to build a transformer-based language model from scratch in Rust, including:
-- **Pre-training** on factual text completion
-- **Instruction tuning** for conversational AI
-- **Interactive chat mode** for testing
+This project demonstrates how to build a transformer-based language model from scratch in Rust that is specialized for Chinese language processing, including:
+- **Pre-training** on Chinese factual text completion
+- **Instruction tuning** for Chinese conversational AI
+- **Interactive chat mode** for Chinese language testing
 - **Full backpropagation** with gradient clipping
 - **Modular architecture** with clean separation of concerns
 
 ## ❌ What This Isn't
 
-This is not a production grade LLM. It is so far away from the larger models.
+This is not a production grade Chinese LLM. It is so far away from the larger Chinese models.
 
-This is just a toy project that demonstrates how these models work under the hood.
+This is just a toy project that demonstrates how Chinese LLMs work under the hood.
 
 ## 🔍 Key Files to Explore
 
@@ -66,42 +66,42 @@ tests/
 
 ## 🧪 What The Model Learns
 
-The implementation includes two training phases:
+The implementation includes two training phases specialized for Chinese:
 
-1. **Pre-training**: Learns basic world knowledge from factual statements
-   - "The sun rises in the east and sets in the west"
-   - "Water flows downhill due to gravity"
-   - "Mountains are tall and rocky formations"
+1. **Pre-training**: Learns Chinese world knowledge from Chinese factual statements
+   - "太阳从东方升起，在西方落下"
+   - "水由于重力而从高处流向低处"
+   - "山脉是高大而多岩石的地形"
 
-2. **Instruction Tuning**: Learns conversational patterns
-   - "User: How do mountains form? Assistant: Mountains are formed through tectonic forces..."
-   - Handles greetings, explanations, and follow-up questions
+2. **Instruction Tuning**: Learns Chinese conversational patterns
+   - "用户：山脉是如何形成的？助手：山脉通过构造力或火山活动形成..."
+   - Handles Chinese greetings, explanations, and follow-up questions
 
 ## 🚀 Quick Start
 
 ```bash
 # Clone and run
-git clone https://github.com/tekaratzas/RustGPT.git
-cd RustGPT
+git clone https://github.com/simfg/RustGPT-Chinese.git
+cd RustGPT-Chinese
 cargo run
 
 # The model will:
-# 1. Build vocabulary from training data
-# 2. Pre-train on factual statements (100 epochs)
-# 3. Instruction-tune on conversational data (100 epochs)
-# 4. Enter interactive mode for testing
+# 1. Build vocabulary from Chinese training data
+# 2. Pre-train on Chinese factual statements (100 epochs)
+# 3. Instruction-tune on Chinese conversational data (100 epochs)
+# 4. Enter interactive mode for Chinese testing
 ```
 
 ## 🎮 Interactive Mode
 
-After training, test the model interactively:
+After training, test the model interactively in Chinese:
 
 ```
-Enter prompt: How do mountains form?
-Model output: Mountains are formed through tectonic forces or volcanism over long geological time periods
+Enter prompt: 山脉是如何形成的?
+Model output: 山脉通过构造力或火山活动在长时间的地质时期内形成
 
-Enter prompt: What causes rain?
-Model output: Rain is caused by water vapor in clouds condensing into droplets that become too heavy to remain airborne
+Enter prompt: 降雨的原因是什么?
+Model output: 降雨是由云中的水蒸气凝结成水滴，当水滴变得太重而无法悬浮在空气中时形成的
 ```
 
 ## 🧮 Technical Implementation
@@ -147,14 +147,14 @@ cargo test -- --nocapture
 
 ## 🧠 Learning Resources
 
-This implementation demonstrates key ML concepts:
+This implementation demonstrates key ML concepts for Chinese language models:
 - **Transformer architecture** (attention, feed-forward, layer norm)
 - **Backpropagation** through neural networks
-- **Language model training** (pre-training + fine-tuning)
-- **Tokenization** and vocabulary management
+- **Chinese language model training** (pre-training + fine-tuning)
+- **Chinese tokenization** and vocabulary management
 - **Gradient-based optimization** with Adam
 
-Perfect for understanding how modern LLMs work under the hood!
+Perfect for understanding how Chinese LLMs work under the hood!
 
 ## 📊 Dependencies
 
@@ -176,7 +176,7 @@ Contributions are welcome! This project is perfect for learning and experimentat
 ### Areas for Improvement
 - **Advanced architectures** (multi-head attention, positional encoding, RoPE)
 - **Training improvements** (different optimizers, learning rate schedules, regularization)
-- **Data handling** (larger datasets, tokenizer improvements, streaming)
+- **Chinese data handling** (larger Chinese datasets, Chinese tokenizer improvements, streaming)
 - **Model analysis** (attention visualization, gradient analysis, interpretability)
 
 ### Getting Started
@@ -191,11 +191,12 @@ Contributions are welcome! This project is perfect for learning and experimentat
 - Add comprehensive tests for new features
 - Update documentation and README as needed
 - Keep the "from scratch" philosophy - avoid heavy ML dependencies
+- Focus on Chinese language processing improvements
 
 ### Ideas for Contributions
-- 🚀 **Beginner**: Model save/load, more training data, config files
-- 🔥 **Intermediate**: Beam search, positional encodings, training checkpoints
-- ⚡ **Advanced**: Multi-head attention, layer parallelization, custom optimizations
+- 🚀 **Beginner**: Model save/load, more Chinese training data, config files
+- 🔥 **Intermediate**: Better Chinese tokenization, Chinese-specific optimizations, training checkpoints
+- ⚡ **Advanced**: Multi-head attention improvements for Chinese, layer parallelization, custom Chinese optimizations
 
 Questions? Open an issue or start a discussion!
 
