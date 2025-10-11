@@ -1,9 +1,8 @@
 # 🦀 RustGPT-Chinese - Chinese-Only LLM
 
-[![Check](https://github.com/simfg/RustGPT-Chinese/actions/workflows/check.yml/badge.svg)](https://github.com/simfg/RustGPT-Chinese/actions/workflows/check.yml) [![Test](https://github.com/simfg/RustGPT-Chinese/actions/workflows/test.yml/badge.svg)](https://github.com/simfg/RustGPT-Chinese/actions/workflows/test.yml)
+[![Check](https://github.com/H-Chris233/RustGPT-Chinese/actions/workflows/check.yml/badge.svg)](https://github.com/H-Chris233/RustGPT-Chinese/actions/workflows/check.yml) [![Test](https://github.com/H-Chris233/RustGPT-Chinese/actions/workflows/test.yml/badge.svg)](https://github.com/H-Chris233/RustGPT-Chinese/actions/workflows/test.yml)
 
-
-https://github.com/user-attachments/assets/ec4a4100-b03a-4b3c-a7d6-806ea54ed4ed
+**[中文文档](README_zh.md) | [中文文档](README_zh.md)**
 
 A complete **Chinese-only Large Language Model implementation in pure Rust** with no external ML frameworks. Built from the ground up using only `ndarray` for matrix operations.
 
@@ -81,7 +80,7 @@ The implementation includes two training phases specialized for Chinese:
 
 ```bash
 # Clone and run
-git clone https://github.com/simfg/RustGPT-Chinese.git
+git clone https://github.com/H-Chris233/RustGPT-Chinese.git
 cd RustGPT-Chinese
 cargo run
 
