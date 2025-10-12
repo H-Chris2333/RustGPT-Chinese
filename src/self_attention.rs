@@ -107,7 +107,7 @@ impl SelfAttention {
 
     // 优化后的 reshape：使用更高效的方式处理多头注意力
     fn reshape_for_heads(&self, x: &Array2<f32>) -> Array2<f32> {
-        let (seq_len, embedding_dim) = x.dim();
+        let (seq_len, _embedding_dim) = x.dim();
 
         // 预分配结果矩阵
         let mut result = Array2::zeros((seq_len * self.num_heads, self.head_dim));

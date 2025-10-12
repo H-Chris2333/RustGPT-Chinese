@@ -40,6 +40,7 @@ impl PerformanceMonitor {
     }
 
     /// 获取某个操作的平均耗时
+    #[allow(dead_code)]
     pub fn get_average(&self, name: &str) -> Option<Duration> {
         self.timers.get(name).map(|durations| {
             let total: Duration = durations.iter().sum();
@@ -48,6 +49,7 @@ impl PerformanceMonitor {
     }
 
     /// 获取某个操作的总耗时
+    #[allow(dead_code)]
     pub fn get_total(&self, name: &str) -> Option<Duration> {
         self.timers.get(name).map(|durations| {
             durations.iter().sum()
@@ -79,6 +81,7 @@ impl PerformanceMonitor {
     }
 
     /// 清空所有统计数据
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.timers.clear();
         self.current_timers.clear();
@@ -86,11 +89,13 @@ impl PerformanceMonitor {
 }
 
 /// 便捷的作用域计时器
+#[allow(dead_code)]
 pub struct ScopedTimer<'a> {
     monitor: &'a mut PerformanceMonitor,
     name: String,
 }
 
+#[allow(dead_code)]
 impl<'a> ScopedTimer<'a> {
     pub fn new(monitor: &'a mut PerformanceMonitor, name: &str) -> Self {
         monitor.start(name);

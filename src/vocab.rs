@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::Write;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -258,7 +257,6 @@ impl Vocab {
         let total_texts = texts.len();
         let mut chinese_texts = 0;
         let mut english_texts = 0;
-        let mut processed_count = 0;
 
         for (idx, text) in texts.iter().enumerate() {
             // 显示当前处理的文本进度
@@ -341,7 +339,6 @@ impl Vocab {
                 }
             }
 
-            processed_count += 1;
             println!("     📊 当前词汇表大小: {} 个唯一词元", vocab_set.len());
         }
 
