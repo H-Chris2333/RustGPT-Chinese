@@ -105,38 +105,47 @@ impl SelfAttention {
         result
     }
 
-    // Function to reshape for multi-head attention
+    // 优化后的 reshape：使用更高效的方式处理多头注意力
     fn reshape_for_heads(&self, x: &Array2<f32>) -> Array2<f32> {
-        let (seq_len, _embedding_dim) = x.dim();
-        let _batch_size = seq_len;
+        let (seq_len, embedding_dim) = x.dim();
 
+        // 预分配结果矩阵
         let mut result = Array2::zeros((seq_len * self.num_heads, self.head_dim));
 
-        for i in 0..seq_len {
-            for j in 0..self.num_heads {
-                for k in 0..self.head_dim {
-                    let orig_idx = j * self.head_dim + k;
-                    result[[i * self.num_heads + j, k]] = x[[i, orig_idx]];
-                }
+        // 优化的重排逻辑：减少内存访问次数
+        for seq_idx in 0..seq_len {
+            let row = x.row(seq_idx);
+            for head_idx in 0..self.num_heads {
+                let start_dim = head_idx * self.head_dim;
+                let end_dim = start_dim + self.head_dim;
+                let result_row_idx = seq_idx * self.num_heads + head_idx;
+
+                // 使用切片赋值，比逐元素复制更高效
+                result.row_mut(result_row_idx)
+                    .assign(&row.slice(s![start_dim..end_dim]));
             }
         }
 
         result
     }
-    
-    // Function to reverse reshape after multi-head attention
+
+    // 优化后的反向 reshape
     fn reverse_reshape_from_heads(&self, x: &Array2<f32>) -> Array2<f32> {
         let (seq_len_times_heads, _head_dim) = x.dim();
         let seq_len = seq_len_times_heads / self.num_heads;
 
         let mut result = Array2::zeros((seq_len, self.num_heads * self.head_dim));
 
-        for i in 0..seq_len {
-            for j in 0..self.num_heads {
-                for k in 0..self.head_dim {
-                    let orig_idx = j * self.head_dim + k;
-                    result[[i, orig_idx]] = x[[i * self.num_heads + j, k]];
-                }
+        // 优化的反向重排逻辑
+        for seq_idx in 0..seq_len {
+            for head_idx in 0..self.num_heads {
+                let src_row_idx = seq_idx * self.num_heads + head_idx;
+                let dst_start = head_idx * self.head_dim;
+                let dst_end = dst_start + self.head_dim;
+
+                // 使用切片赋值
+                result.slice_mut(s![seq_idx, dst_start..dst_end])
+                    .assign(&x.row(src_row_idx));
             }
         }
 

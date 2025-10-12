@@ -349,33 +349,17 @@ impl LLM {
     }
     
     pub fn tokenize(&self, text: &str) -> Vec<usize> {
-        // Initialize Jieba tokenizer
-        let jieba = jieba_rs::Jieba::new();
-        
+        // 使用 vocab 模块中的全局 Jieba 实例
+        // 不再每次调用都初始化 Jieba
+
         // Check if the text contains Chinese characters
         let has_chinese = text.chars().any(|c| (c as u32) >= 0x4E00 && (c as u32) <= 0x9FFF);
-        
+
         let mut tokens = Vec::new();
-        
+
         if has_chinese {
-            // Use Jieba for Chinese text tokenization
-            let jieba_tokens = jieba.cut(text, false);
-            for token in jieba_tokens {
-                let trimmed_token = token.trim();
-                
-                // Special case for end token
-                if trimmed_token == "</s>" {
-                    if let Some(token_id) = self.vocab.encode(trimmed_token) {
-                        tokens.push(token_id);
-                    }
-                    continue;
-                }
-                
-                // Add the token if it exists in the vocabulary
-                if let Some(token_id) = self.vocab.encode(trimmed_token) {
-                    tokens.push(token_id);
-                }
-            }
+            // 使用 vocab 的 encode_sequence 方法，它内部使用全局 Jieba 实例
+            return self.vocab.encode_sequence(text);
         } else {
             // Use the original method for non-Chinese text
             for word in text.split_whitespace() {

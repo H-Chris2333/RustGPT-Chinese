@@ -12,11 +12,22 @@ use serde::{Serialize, Deserialize};
 use std::fs;
 
 static COMMON_IDIOM_SET: OnceLock<HashSet<String>> = OnceLock::new();
+static JIEBA_INSTANCE: OnceLock<Jieba> = OnceLock::new();
 
 fn common_idioms() -> &'static HashSet<String> {
     COMMON_IDIOM_SET.get_or_init(|| {
         load_common_idioms_from_file()
             .expect("Failed to load chinese idioms from data/chinese_idioms.json")
+    })
+}
+
+/// 获取全局共享的 Jieba 实例，避免重复初始化
+fn jieba_instance() -> &'static Jieba {
+    JIEBA_INSTANCE.get_or_init(|| {
+        println!("⏳ 初始化全局 Jieba 分词器实例（仅一次）...");
+        let jieba = Jieba::new();
+        println!("✓ Jieba 分词器初始化完成！");
+        jieba
     })
 }
 
@@ -53,28 +64,57 @@ impl Vocab {
         let mut decode = HashMap::new();
 
         // Add special tokens first with their predefined IDs
-        println!("Adding special tokens to vocabulary:");
-        for (token, id) in &special_tokens {
-            encode.insert(token.clone(), *id);
-            decode.insert(*id, token.clone());
-            println!("  Added special token: '{}' with ID {}", token, id);
+        println!("\n=== 初始化词汇表：添加特殊词元 ===");
+        let mut special_tokens_sorted: Vec<_> = special_tokens.iter().collect();
+        special_tokens_sorted.sort_by_key(|(_, id)| *id);
+
+        for (token, id) in &special_tokens_sorted {
+            encode.insert((*token).clone(), **id);
+            decode.insert(**id, (*token).clone());
+            println!("  ✓ 特殊词元: '{}' -> ID {}", token, id);
         }
+        println!("特殊词元添加完成，共 {} 个\n", special_tokens.len());
 
         // Add remaining words starting from the next available ID
-        println!("Adding regular vocabulary words:");
+        println!("=== 添加常规词汇 ===");
         let mut next_id = special_tokens.values().max().unwrap_or(&0) + 1;
+        let mut added_count = 0;
+        let mut skipped_count = 0;
+        let mut chinese_count = 0;
+        let mut english_count = 0;
+
+        // 统计词元类型
         for word in words.iter() {
             let word_str = word.to_string();
             if !encode.contains_key(&word_str) {
                 encode.insert(word_str.clone(), next_id);
                 decode.insert(next_id, word_str.clone());
-                println!("  Added word: '{}' with ID {}", word_str, next_id);
+
+                // 判断词元类型
+                let is_chinese = word_str.chars().any(|c| (c as u32) >= 0x4E00 && (c as u32) <= 0x9FFF);
+                if is_chinese {
+                    chinese_count += 1;
+                    println!("  [中文] '{}' -> ID {}", word_str, next_id);
+                } else {
+                    english_count += 1;
+                    println!("  [其他] '{}' -> ID {}", word_str, next_id);
+                }
+
+                added_count += 1;
                 next_id += 1;
             } else {
-                // If the word already exists (e.g., as a special token), skip it
-                println!("  Skipped duplicate word: '{}' (already exists with ID {})", word_str, encode[&word_str]);
+                skipped_count += 1;
+                println!("  [跳过] '{}' (已存在，ID: {})", word_str, encode[&word_str]);
             }
         }
+
+        println!("\n=== 词汇表构建完成 ===");
+        println!("  • 新增词元: {} 个", added_count);
+        println!("  • 跳过重复: {} 个", skipped_count);
+        println!("  • 中文词元: {} 个", chinese_count);
+        println!("  • 其他词元: {} 个", english_count);
+        println!("  • 总词汇量: {} 个", encode.len());
+        println!("========================\n");
 
         let all_words: Vec<String> = decode.values().cloned().collect();
 
@@ -108,12 +148,12 @@ impl Vocab {
     /// Encode a sequence of text into token IDs
     pub fn encode_sequence(&self, text: &str) -> Vec<usize> {
         let mut tokens = Vec::new();
-        
+
         // Check if the text contains Chinese characters
         let has_chinese = text.chars().any(|c| (c as u32) >= 0x4E00 && (c as u32) <= 0x9FFF);
-        
+
         if has_chinese {
-            let jieba = Jieba::new();
+            let jieba = jieba_instance(); // 使用全局实例
             let seg_list = jieba.cut(text, false);
             for word in seg_list {
                 if !word.trim().is_empty() {
@@ -128,7 +168,7 @@ impl Vocab {
                 tokens.push(token_id);
             }
         }
-        
+
         tokens
     }
 
@@ -191,6 +231,11 @@ impl Vocab {
 
     /// Process text data to extract vocabulary words and add them to the vocabulary set
     pub fn process_text_for_vocab(texts: &[String], vocab_set: &mut HashSet<String>) {
+        use std::io::Write;
+
+        println!("\n🔧 开始处理文本数据以构建词汇表...");
+        println!("  📊 待处理文本数量: {}", texts.len());
+
         let mut vocab_log = String::new();
         let mut idiom_writer = std::io::BufWriter::new(std::io::sink());
 
@@ -203,29 +248,66 @@ impl Vocab {
         vocab_set.insert("<|mask|>".to_string());
 
         vocab_log.push_str("Initialized special tokens.\n");
+        println!("  ✓ 已添加 7 个特殊词元");
 
-        // Initialize Jieba tokenizer
-        let jieba = Jieba::new();
+        // 使用全局 Jieba 实例（如果未初始化会自动初始化）
+        println!("\n📝 开始分词处理...");
+        let jieba = jieba_instance();
 
         // Process all training examples for vocabulary
-        for text in texts {
+        let total_texts = texts.len();
+        let mut chinese_texts = 0;
+        let mut english_texts = 0;
+        let mut processed_count = 0;
+
+        for (idx, text) in texts.iter().enumerate() {
+            // 显示当前处理的文本进度
+            println!("\n  📄 处理文本 [{}/{}]", idx + 1, total_texts);
+
+            // 安全地截取文本预览（处理 UTF-8 字符边界）
+            let preview = if text.len() > 50 {
+                // 使用字符迭代器确保不会在字符中间切割
+                text.chars().take(50).collect::<String>()
+            } else {
+                text.clone()
+            };
+            println!("     内容预览: {}...", preview);
+            std::io::stdout().flush().unwrap();
+
             // Check if the text contains Chinese characters
             let has_chinese = text.chars().any(|c| (c as u32) >= 0x4E00 && (c as u32) <= 0x9FFF);
-            
+
             if has_chinese {
+                chinese_texts += 1;
+                println!("     类型: 中文文本");
+
                 // Use Jieba for Chinese text tokenization
+                println!("     ⏳ 开始 Jieba 分词...");
+                std::io::stdout().flush().unwrap();
+
                 let tokens = jieba.cut(text, false);
+                let token_count = tokens.len();
+
+                println!("     ✓ 分词完成，提取了 {} 个词元", token_count);
+
                 for token in tokens {
                     if !token.trim().is_empty() {
                         let token_trimmed = token.trim().to_string();
                         vocab_log.push_str(&format!("Token: {}\n", token_trimmed));
-                        vocab_set.insert(token_trimmed);
+                        let is_new = vocab_set.insert(token_trimmed.clone());
+                        if is_new {
+                            println!("       + 新词元: '{}'", token_trimmed);
+                        }
                     }
                 }
 
                 // Process common Chinese idioms and phrases that might be missed by Jieba
+                println!("     🔍 提取成语和短语...");
                 Self::extract_chinese_phrases(text, vocab_set);
             } else {
+                english_texts += 1;
+                println!("     类型: 英文/其他文本");
+
                 // Use the original method for non-Chinese text
                 for word in text.split_whitespace() {
                     // Handle punctuation by splitting it from words
@@ -234,22 +316,42 @@ impl Vocab {
                         if c.is_ascii_punctuation() {
                             if !current.is_empty() {
                                 vocab_log.push_str(&format!("Word: {}\n", current));
-                                vocab_set.insert(current.clone());
+                                let is_new = vocab_set.insert(current.clone());
+                                if is_new {
+                                    println!("       + 新词元: '{}'", current);
+                                }
                                 current.clear();
                             }
                             vocab_log.push_str(&format!("Punctuation: {}\n", c));
-                            vocab_set.insert(c.to_string());
+                            let is_new = vocab_set.insert(c.to_string());
+                            if is_new {
+                                println!("       + 新标点: '{}'", c);
+                            }
                         } else {
                             current.push(c);
                         }
                     }
                     if !current.is_empty() {
                         vocab_log.push_str(&format!("Word: {}\n", current));
-                        vocab_set.insert(current);
+                        let is_new = vocab_set.insert(current.clone());
+                        if is_new {
+                            println!("       + 新词元: '{}'", current);
+                        }
                     }
                 }
             }
+
+            processed_count += 1;
+            println!("     📊 当前词汇表大小: {} 个唯一词元", vocab_set.len());
         }
+
+        // 显示最终统计
+        println!("\n✅ 文本处理完成！");
+        println!("\n📊 分词处理统计:");
+        println!("  • 处理文本总数: {} 个", total_texts);
+        println!("  • 中文文本: {} 个", chinese_texts);
+        println!("  • 其他文本: {} 个", english_texts);
+        println!("  • 最终词汇集大小: {} 个唯一词元", vocab_set.len());
 
         let _ = writeln!(idiom_writer, "{}", vocab_log);
     }
@@ -300,7 +402,7 @@ impl Vocab {
         if length == 4 && Self::is_common_chinese_idiom(phrase) {
             return true;
         }
-        let jieba = Jieba::new();
+        let jieba = jieba_instance(); // 使用全局实例
         let tokens = jieba.cut(phrase, false);
         if tokens.is_empty() {
             return false;
