@@ -40,15 +40,21 @@ fn main() {
 
     // Process all training examples for vocabulary
     // First process pre-training data
+    println!("Processing pre-training data for vocabulary...");
     Vocab::process_text_for_vocab(&dataset.pretraining_data, &mut vocab_set);
+    println!("Added tokens from pre-training data. Current vocabulary size: {}", vocab_set.len());
 
     // Then process chat training data
+    println!("Processing chat training data for vocabulary...");
     Vocab::process_text_for_vocab(&dataset.chat_training_data, &mut vocab_set);
+    println!("Added tokens from chat training data. Final vocabulary size: {}", vocab_set.len());
 
     let mut vocab_words: Vec<String> = vocab_set.into_iter().collect();
     vocab_words.sort(); // Sort for deterministic ordering
+    println!("Creating vocabulary with {} unique tokens...", vocab_words.len());
     let vocab_words_refs: Vec<&str> = vocab_words.iter().map(|s: &String| s.as_str()).collect();
     let vocab = Vocab::new(vocab_words_refs);
+    println!("Vocabulary created successfully with {} total tokens (including special tokens)", vocab.len());
 
     let transformer_block_1 = TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM);
     let transformer_block_2 = TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM);

@@ -71,3 +71,5 @@ fn test_build_from_texts() {
     assert!(vocab.encode("world").is_some());
     assert!(vocab.encode("rust").is_some());
 }
+
+
