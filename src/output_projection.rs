@@ -34,13 +34,11 @@ impl Layer for OutputProjection {
 
     /// Forward pass: project embeddings to vocab logits
     fn forward(&mut self, input: &Array2<f32>) -> Array2<f32> {
-        // input shape is [sequence_length, embedding_dim]
         self.cached_input = Some(input.clone());
-        input.dot(&self.w_out) + &self.b_out // shape is [sequence_length, vocab_size]
+        input.dot(&self.w_out) + &self.b_out
     }
 
     fn backward(&mut self, grads: &Array2<f32>, lr: f32) -> Array2<f32> {
-        // grads shape is [sequence_length, vocab_size]
         let input = self.cached_input.as_ref().unwrap();
         let grad_w_out = input.t().dot(grads);
         let grad_b_out = grads.mean_axis(Axis(0)).unwrap();
@@ -56,4 +54,6 @@ impl Layer for OutputProjection {
     fn parameters(&self) -> usize {
         self.w_out.len() + self.b_out.len()
     }
+
+    fn set_training_mode(&mut self, _training: bool) {}
 }

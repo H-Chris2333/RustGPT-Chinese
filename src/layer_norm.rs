@@ -59,16 +59,13 @@ impl Layer for LayerNorm {
         let std = self.cached_std.as_ref().unwrap();
 
         let normalized = (input - mean) / (std + self.epsilon);
-        let n_features = input.shape()[1] as f32; // Number of features per token
+        let n_features = input.shape()[1] as f32;
 
-        // Gradients w.r.t. gamma and beta
         let grad_gamma = (&normalized * grads).sum_axis(Axis(0)).insert_axis(Axis(0));
         let grad_beta = grads.sum_axis(Axis(0)).insert_axis(Axis(0));
 
-        // Gradient w.r.t. normalized values
         let grad_normalized = &self.gamma * grads;
 
-        // LayerNorm backward pass with full chain rule
         let grad_input = {
             let variance = std * std + self.epsilon;
             let grad_var = (&grad_normalized * &normalized)
@@ -86,7 +83,6 @@ impl Layer for LayerNorm {
                 + &grad_mean / n_features
         };
 
-        // Update learnable parameters
         self.optimizer_gamma.step(&mut self.gamma, &grad_gamma, lr);
         self.optimizer_beta.step(&mut self.beta, &grad_beta, lr);
 
@@ -96,4 +92,6 @@ impl Layer for LayerNorm {
     fn parameters(&self) -> usize {
         self.gamma.len() + self.beta.len()
     }
+
+    fn set_training_mode(&mut self, _training: bool) {}
 }

@@ -35,6 +35,7 @@ impl PositionEncoding {
     
     /// Apply position encoding to input embeddings
     /// input: (seq_len, embedding_dim)
+    #[allow(dead_code)]
     pub fn apply_to_input(&self, input: &mut Array2<f32>) {
         let (seq_len, embedding_dim) = input.dim();
         
@@ -53,12 +54,14 @@ impl PositionEncoding {
 // For Chinese language, we might also want to implement relative position encoding
 // which works better with the structure of Chinese text
 
+#[allow(dead_code)]
 pub struct RelativePositionEncoding {
     pub encoding: Array2<f32>,
     pub max_offset: usize,
 }
 
 impl RelativePositionEncoding {
+    #[allow(dead_code)]
     pub fn new(max_offset: usize) -> Self {
         // Create relative position encoding matrix
         let total_positions = 2 * max_offset + 1;
@@ -80,6 +83,7 @@ impl RelativePositionEncoding {
         Self { encoding, max_offset }
     }
 
+    #[allow(dead_code)]
     /// Get encoding for a relative position
     pub fn get_encoding(&self, relative_pos: i32) -> Option<Vec<f32>> {
         let index = relative_pos as i32 + self.max_offset as i32;

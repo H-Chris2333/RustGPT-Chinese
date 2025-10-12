@@ -1,12 +1,13 @@
 use std::f32;
 
-use ndarray::{Array2, Axis, s};
+use ndarray::{Array2, s};
 use rand_distr::{Distribution, Normal};
 
 use crate::{EMBEDDING_DIM, adam::Adam, llm::Layer};
 
 pub struct SelfAttention {
-    pub embedding_dim: usize,
+    #[allow(dead_code)]
+    embedding_dim: usize,
     num_heads: usize,
     head_dim: usize,
     w_q: Array2<f32>, // Weight matrices for Q, K, V
@@ -62,19 +63,18 @@ impl SelfAttention {
     }
 
     fn compute_qkv(&self, input: &Array2<f32>) -> (Array2<f32>, Array2<f32>, Array2<f32>) {
-        let q = input.dot(&self.w_q); // Q = X * W_Q
-        let k = input.dot(&self.w_k); // K = X * W_K
-        let v = input.dot(&self.w_v); // V = X * W_V
+        let q = input.dot(&self.w_q);
+        let k = input.dot(&self.w_k);
+        let v = input.dot(&self.w_v);
         (q, k, v)
     }
 
     fn attention(&self, q: &Array2<f32>, k: &Array2<f32>, v: &Array2<f32>) -> Array2<f32> {
-        let dk = (self.embedding_dim as f32).sqrt();
+        let dk = (q.ncols() as f32).sqrt();
 
         let k_t = k.t();
         let mut scores = q.dot(&k_t) / dk;
 
-        // Apply causal masking - prevent attention to future tokens
         let seq_len = scores.shape()[0];
         for i in 0..seq_len {
             for j in (i + 1)..seq_len {
@@ -107,13 +107,11 @@ impl SelfAttention {
 
     // Function to reshape for multi-head attention
     fn reshape_for_heads(&self, x: &Array2<f32>) -> Array2<f32> {
-        let (seq_len, embedding_dim) = x.dim();
-        let batch_size = seq_len;
-        
-        // Reshape from (seq_len, embedding_dim) to (seq_len, num_heads, head_dim)
-        // We'll use a flattened representation: (seq_len * num_heads, head_dim)
+        let (seq_len, _embedding_dim) = x.dim();
+        let _batch_size = seq_len;
+
         let mut result = Array2::zeros((seq_len * self.num_heads, self.head_dim));
-        
+
         for i in 0..seq_len {
             for j in 0..self.num_heads {
                 for k in 0..self.head_dim {
@@ -122,18 +120,17 @@ impl SelfAttention {
                 }
             }
         }
-        
+
         result
     }
     
     // Function to reverse reshape after multi-head attention
     fn reverse_reshape_from_heads(&self, x: &Array2<f32>) -> Array2<f32> {
-        let (seq_len_times_heads, head_dim) = x.dim();
+        let (seq_len_times_heads, _head_dim) = x.dim();
         let seq_len = seq_len_times_heads / self.num_heads;
-        
-        // Reshape from (seq_len * num_heads, head_dim) back to (seq_len, embedding_dim)
+
         let mut result = Array2::zeros((seq_len, self.num_heads * self.head_dim));
-        
+
         for i in 0..seq_len {
             for j in 0..self.num_heads {
                 for k in 0..self.head_dim {
@@ -142,22 +139,21 @@ impl SelfAttention {
                 }
             }
         }
-        
+
         result
     }
 
     fn softmax_backward(
-        softmax_output: &Array2<f32>, // shape: [seq_len, vocab_size]
-        grad_output: &Array2<f32>,    // shape: [seq_len, vocab_size]
+        softmax_output: &Array2<f32>,
+        grad_output: &Array2<f32>,
     ) -> Array2<f32> {
-        let mut grad_input = softmax_output.clone(); // to hold the result
+        let mut grad_input = softmax_output.clone();
 
         for ((mut grad_row, softmax_row), grad_out_row) in grad_input
             .outer_iter_mut()
             .zip(softmax_output.outer_iter())
             .zip(grad_output.outer_iter())
         {
-            // dot product: y ⊙ dL/dy
             let dot = softmax_row
                 .iter()
                 .zip(grad_out_row.iter())
@@ -177,57 +173,35 @@ impl SelfAttention {
     }
     
     // Perform multi-head attention
-    fn multi_head_attention(&self, input: &Array2<f32>) -> Array2<f32> {
-        let (seq_len, embedding_dim) = input.dim();
-        
-        // Calculate Q, K, V
-        let q = input.dot(&self.w_q); // (seq_len, embedding_dim)
-        let k = input.dot(&self.w_k); // (seq_len, embedding_dim)
-        let v = input.dot(&self.w_v); // (seq_len, embedding_dim)
-        
-        // Reshape for multi-head attention
-        let q_heads = self.reshape_for_heads(&q); // (seq_len * num_heads, head_dim)
-        let k_heads = self.reshape_for_heads(&k); // (seq_len * num_heads, head_dim)
-        let v_heads = self.reshape_for_heads(&v); // (seq_len * num_heads, head_dim)
-        
-        // Process each head separately
+    fn multi_head_attention(&mut self, input: &Array2<f32>) -> Array2<f32> {
+        let (seq_len, _embedding_dim) = input.dim();
+
+        let (q, k, v) = self.compute_qkv(input);
+
+        let q_heads = self.reshape_for_heads(&q);
+        let k_heads = self.reshape_for_heads(&k);
+        let v_heads = self.reshape_for_heads(&v);
+
         let mut result = Array2::zeros((seq_len * self.num_heads, self.head_dim));
-        
+
         for head in 0..self.num_heads {
-            // Get the data for this head
-            let q_head = q_heads.slice(s![head..seq_len * self.num_heads; self.num_heads, ..]).to_owned(); // (seq_len, head_dim)
-            let k_head = k_heads.slice(s![head..seq_len * self.num_heads; self.num_heads, ..]).to_owned(); // (seq_len, head_dim)
-            let v_head = v_heads.slice(s![head..seq_len * self.num_heads; self.num_heads, ..]).to_owned(); // (seq_len, head_dim)
-            
-            // Calculate attention for this head
-            let dk = (self.head_dim as f32).sqrt();
-            let k_head_t = k_head.t();
-            let mut scores = q_head.dot(&k_head_t) / dk; // (seq_len, seq_len)
-            
-            // Apply causal masking - prevent attention to future tokens
-            let scores_seq_len = scores.shape()[0];
-            for i in 0..scores_seq_len {
-                for j in (i + 1)..scores_seq_len {
-                    scores[[i, j]] = f32::NEG_INFINITY;
-                }
-            }
-            
-            let weights = self.softmax(&scores); // (seq_len, seq_len)
-            let head_output = weights.dot(&v_head); // (seq_len, head_dim)
-            
-            // Store the result for this head
+            let q_head = q_heads.slice(s![head..seq_len * self.num_heads; self.num_heads, ..]).to_owned();
+            let k_head = k_heads.slice(s![head..seq_len * self.num_heads; self.num_heads, ..]).to_owned();
+            let v_head = v_heads.slice(s![head..seq_len * self.num_heads; self.num_heads, ..]).to_owned();
+
+            let head_output = self.attention(&q_head, &k_head, &v_head);
+
             for i in 0..seq_len {
                 for j in 0..self.head_dim {
                     result[[i * self.num_heads + head, j]] = head_output[[i, j]];
                 }
             }
         }
-        
-        // Reverse reshape to combine heads
-        let combined = self.reverse_reshape_from_heads(&result); // (seq_len, embedding_dim)
-        
-        // Apply output projection
-        combined.dot(&self.w_o) // (seq_len, embedding_dim)
+
+        let combined = self.reverse_reshape_from_heads(&result);
+        self.cached_attention_weights = Some(combined.clone());
+
+        combined.dot(&self.w_o)
     }
 }
 
@@ -239,27 +213,42 @@ impl Layer for SelfAttention {
     fn forward(&mut self, input: &Array2<f32>) -> Array2<f32> {
         self.cached_input = Some(input.clone());
         let attention_output = self.multi_head_attention(input);
-        attention_output + input // residual connection (no LayerNorm here)
+        attention_output + input
     }
 
     fn backward(&mut self, grads: &Array2<f32>, lr: f32) -> Array2<f32> {
-        // For simplicity, we'll implement a simplified backward pass
-        // A full implementation would require caching more intermediate values
         let input = self.cached_input.as_ref().unwrap();
-        
-        // For now, we'll just update the output weights and return gradients
-        // In a more complete implementation, we would compute gradients for Q, K, V, and O matrices
-        let attention_grads = grads; // Simplified: assume the gradient flows back through attention
-        
-        // Update output projection weights (simplified)
-        let output_grads = attention_grads.t().dot(&(input.dot(&self.w_o)));
-        self.optimizer_w_o.step(&mut self.w_o, &output_grads, lr);
-        
-        // Return gradient to propagate further back
-        attention_grads + grads // Include residual connection
+
+        let attention_weights = self.cached_attention_weights.as_ref().cloned().unwrap_or_else(|| input.clone());
+
+        let grad_w_o = attention_weights.t().dot(grads);
+        self.optimizer_w_o.step(&mut self.w_o, &grad_w_o, lr);
+
+        let grad_after_proj = grads.dot(&self.w_o.t());
+
+        let softmax_grad = Self::softmax_backward(&attention_weights, &grad_after_proj);
+
+        // Compute gradients for Q, K, V weights using the cached input and gradients
+        let grad_q = softmax_grad.dot(&self.w_q.t());
+        let grad_k = softmax_grad.dot(&self.w_k.t());
+        let grad_v = softmax_grad.dot(&self.w_v.t());
+
+        let grad_w_q = input.t().dot(&grad_q);
+        let grad_w_k = input.t().dot(&grad_k);
+        let grad_w_v = input.t().dot(&grad_v);
+
+        self.optimizer_w_q.step(&mut self.w_q, &grad_w_q, lr);
+        self.optimizer_w_k.step(&mut self.w_k, &grad_w_k, lr);
+        self.optimizer_w_v.step(&mut self.w_v, &grad_w_v, lr);
+
+        let grad_input = grad_q + grad_k + grad_v;
+
+        grad_input + grads
     }
 
     fn parameters(&self) -> usize {
         self.w_k.len() + self.w_q.len() + self.w_v.len() + self.w_o.len()
     }
+
+    fn set_training_mode(&mut self, _training: bool) {}
 }

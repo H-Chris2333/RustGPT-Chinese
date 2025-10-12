@@ -1,7 +1,7 @@
 use ndarray::Array2;
-use rand::Rng;
+use rand::{rng, Rng};
 
-use crate::{adam::Adam, llm::Layer};
+use crate::llm::Layer;
 
 pub struct Dropout {
     pub dropout_rate: f32,
@@ -23,7 +23,7 @@ impl Dropout {
     }
 
     fn create_mask(&self, shape: (usize, usize)) -> Array2<f32> {
-        let mut rng = rand::thread_rng();
+        let mut rng = rng();
         let (rows, cols) = shape;
         let mut mask = Array2::zeros((rows, cols));
         
@@ -50,37 +50,35 @@ impl Layer for Dropout {
         if self.training && self.dropout_rate > 0.0 {
             let mask = self.create_mask(input.dim());
             self.mask = Some(mask.clone());
-            
-            // Apply dropout: multiply input by mask and scale by (1 / (1 - dropout_rate))
-            // Scaling is important to maintain the expected value during training
+
             let scale_factor = 1.0 / (1.0 - self.dropout_rate);
             let mut result = input.clone();
-            result *= &mask;  // Element-wise multiplication
-            result *= scale_factor;  // Scale by factor
+            result *= &mask;
+            result *= scale_factor;
             result
         } else {
-            // In inference mode or when dropout_rate is 0, return input unchanged
             input.clone()
         }
     }
 
     fn backward(&mut self, grads: &Array2<f32>, _lr: f32) -> Array2<f32> {
         if self.training && self.dropout_rate > 0.0 {
-            // Apply the same mask that was used in the forward pass to the gradients
             let mask = self.mask.as_ref().unwrap();
             let scale_factor = 1.0 / (1.0 - self.dropout_rate);
             let mut result = grads.clone();
-            result *= mask;  // Element-wise multiplication
-            result *= scale_factor;  // Scale by factor
+            result *= mask;
+            result *= scale_factor;
             result
         } else {
-            // Return gradients unchanged if not in training mode or dropout_rate is 0
             grads.clone()
         }
     }
 
     fn parameters(&self) -> usize {
-        // Dropout layer has no trainable parameters
         0
+    }
+
+    fn set_training_mode(&mut self, training: bool) {
+        self.training = training;
     }
 }

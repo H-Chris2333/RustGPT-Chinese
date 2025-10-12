@@ -1,7 +1,7 @@
 use ndarray::Array2;
 use std::collections::HashMap;
 
-use crate::{llm::Layer, vocab::Vocab};
+use crate::vocab::Vocab;
 
 /// A module to enhance semantic understanding by capturing relationships between tokens
 pub struct SemanticEnhancer {
@@ -19,7 +19,7 @@ impl SemanticEnhancer {
     pub fn new(vocab: Vocab) -> Self {
         let mut enhancer = Self {
             semantic_map: HashMap::new(),
-            relation_embeddings: Array2::zeros((vocab.words.len(), 64)), // 64-dim relation space
+            relation_embeddings: Array2::zeros((vocab.words.len(), 64)),
             vocab,
         };
         
@@ -95,10 +95,27 @@ impl SemanticEnhancer {
     }
     
     /// Enhance input embeddings with semantic information
-    pub fn enhance_embeddings(&self, input_embeddings: &Array2<f32>, token_ids: &[usize]) -> Array2<f32> {
+    pub fn enhance_embeddings(&mut self, input_embeddings: &Array2<f32>, token_ids: &[usize]) -> Array2<f32> {
         let mut enhanced = input_embeddings.clone();
-        
-        // For each position in the sequence, consider semantic relationships with other positions
+
+        for (token_id, related_tokens) in self.semantic_map.iter() {
+            if let Some(token_index) = self.vocab.encode(token_id) {
+                for (idx, related_token) in related_tokens.iter().enumerate() {
+                    if let Some(related_index) = self.vocab.encode(related_token) {
+                        let column = idx % self.relation_embeddings.ncols();
+                        self.relation_embeddings[[token_index, column]] = 0.5;
+                        self.relation_embeddings[[related_index, column]] = 0.5;
+                    }
+                }
+            }
+        }
+
+        for idx in 0..self.relation_embeddings.nrows() {
+            if self.relation_embeddings.row(idx).iter().all(|&value| value == 0.0) {
+                self.relation_embeddings[[idx, 0]] = 1.0;
+            }
+        }
+
         for (pos, &token_id) in token_ids.iter().enumerate() {
             if let Some(token_str) = self.vocab.decode.get(&token_id) {
                 // Look for related tokens in the sequence

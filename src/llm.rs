@@ -1,7 +1,8 @@
 use std::cmp::Ordering;
 
 use ndarray::{Array1, Array2, Axis};
-use rand::{Rng, thread_rng};
+use rand::rng;
+use rand::Rng;
 
 use crate::{
     EMBEDDING_DIM, Embeddings, HIDDEN_DIM, MAX_SEQ_LEN, Vocab, output_projection::OutputProjection,
@@ -15,14 +16,17 @@ pub trait Layer {
     fn backward(&mut self, grads: &Array2<f32>, lr: f32) -> Array2<f32>;
 
     fn parameters(&self) -> usize;
+
+    fn set_training_mode(&mut self, _training: bool) {}
 }
 
 #[allow(clippy::upper_case_acronyms)]
 pub struct LLM {
     pub vocab: Vocab,
     pub network: Vec<Box<dyn Layer>>,
-    context_window: Vec<usize>,  // Store token IDs of the current context
-    max_context_length: usize,   // Maximum length of context to maintain
+    pub context_window: Vec<usize>,
+    pub max_context_length: usize,
+    training: bool,
 }
 
 impl Default for LLM {
@@ -39,22 +43,24 @@ impl Default for LLM {
                 Box::new(transformer_block_1),
                 Box::new(transformer_block_2),
                 Box::new(transformer_block_3),
-                Box::new(transformer_block_4),  // Added fourth transformer block for Chinese
+                Box::new(transformer_block_4),
                 Box::new(output_projection),
             ],
             context_window: Vec::new(),
-            max_context_length: MAX_SEQ_LEN,  // Use the defined constant
+            max_context_length: MAX_SEQ_LEN,
+            training: true,
         }
     }
 }
 
 impl LLM {
     pub fn new(vocab: Vocab, network: Vec<Box<dyn Layer>>) -> Self {
-        Self { 
-            vocab, 
+        Self {
+            vocab,
             network,
             context_window: Vec::new(),
-            max_context_length: MAX_SEQ_LEN,  // Use the defined constant
+            max_context_length: MAX_SEQ_LEN,
+            training: true,
         }
     }
 }
@@ -69,25 +75,27 @@ impl LLM {
     }
 
     pub fn total_parameters(&self) -> usize {
-        // Sum the parameters across all layers in the network
         self.network
             .iter()
             .map(|layer| layer.parameters())
             .sum::<usize>()
     }
 
+    pub fn set_training_mode(&mut self, training: bool) {
+        self.training = training;
+        for layer in &mut self.network {
+            layer.set_training_mode(training);
+        }
+    }
+
     pub fn predict(&mut self, text: &str) -> String {
-        self.predict_with_sampling(text, 1.0, 0.9, 5)  // Default to top-p sampling with p=0.9, top-k=5
+        self.predict_with_sampling(text, 1.0, 0.9, 5)
     }
-    
-    /// Predict with configurable sampling methods
+
     pub fn predict_with_sampling(&mut self, text: &str, temperature: f32, top_p: f32, top_k: usize) -> String {
-        // For now, using top-p sampling as default - in a more complete implementation
-        // we would apply temperature scaling and the specific sampling method
-        self.forward_with_sampling(text, top_p, top_k)
+        self.forward_with_sampling(text, temperature, top_p, top_k)
     }
-    
-    /// Predict with context - uses the current context window to generate the next tokens
+
     pub fn predict_with_context(&mut self, text: &str, temperature: f32, top_p: f32, top_k: usize) -> String {
         // Tokenize the new input
         let new_tokens = self.tokenize(text);
@@ -102,34 +110,29 @@ impl LLM {
             all_tokens = all_tokens[start_idx..].to_vec();
         }
         
-        // Generate prediction based on combined context
-        let result = self.generate_with_context(&all_tokens, top_p, top_k);
-        
-        // Add the input and the result to the context window
+        let result = self.generate_with_context(&all_tokens, temperature, top_p, top_k);
+
         self.add_to_context(&new_tokens);
         let result_tokens = self.tokenize(&result);
         self.add_to_context(&result_tokens);
-        
+
         result
     }
-    
+
     pub fn predict_with_beam_search(&mut self, text: &str, beam_width: usize, max_length: usize) -> String {
         self.beam_search(text, beam_width, max_length)
     }
     
-    fn forward_with_sampling(&mut self, text: &str, top_p: f32, top_k: usize) -> String {
-        // Tokenize the input text
+    fn forward_with_sampling(&mut self, text: &str, temperature: f32, top_p: f32, top_k: usize) -> String {
         let mut tokenized = self.tokenize(text);
         let mut output_tokens: Vec<usize> = Vec::new();
 
-        // Safety check: ensure we have at least one token
         if tokenized.is_empty() {
             return String::new();
         }
 
         let input_len = tokenized.len();
 
-        // Prevent overflow if input_len >= MAX_SEQ_LEN
         if input_len >= MAX_SEQ_LEN {
             return String::new();
         }
@@ -148,7 +151,6 @@ impl LLM {
 
             let logits = input;
 
-            // Safety check: ensure we have at least one token
             if logits.shape()[0] == 0 {
                 break;
             }
@@ -158,12 +160,15 @@ impl LLM {
                 .to_owned()
                 .insert_axis(Axis(0));
 
-            // Softmax - convert activations of each token to a probability distribution over the
-            // vocabulary
-            let probs = Self::softmax(&last_logit); // 1 x vocab_size
+            let probs = Self::softmax(&last_logit);
 
-            // Use top-p (nucleus) sampling instead of greedy decode
-            let tokens = self.top_p_sampling(&probs, top_p);
+            let adjusted_probs = Self::apply_temperature(&probs, temperature);
+
+            let tokens = if top_k > 0 {
+                self.top_k_sampling(&adjusted_probs, top_k)
+            } else {
+                self.top_p_sampling(&adjusted_probs, top_p)
+            };
 
             let next_token = tokens[tokens.len() - 1];
 
@@ -175,7 +180,6 @@ impl LLM {
             }
         }
 
-        // Convert token_ids to strings
         let token_strs = output_tokens
             .iter()
             .map(|t| self.vocab.decode[t].clone())
@@ -185,27 +189,22 @@ impl LLM {
         self.post_process_chinese_text(&raw_output)
     }
 
+    #[allow(dead_code)]
     fn forward(&mut self, text: &str) -> Vec<usize> {
-        // Tokenize the input text
         let mut tokenized = self.tokenize(text);
         let mut output_tokens: Vec<usize> = Vec::new();
 
-        // Safety check: ensure we have at least one token
         if tokenized.is_empty() {
             return output_tokens;
         }
 
         let input_len = tokenized.len();
 
-        // Prevent overflow if input_len >= MAX_SEQ_LEN
         if input_len >= MAX_SEQ_LEN {
             return output_tokens;
         }
 
         for _ in 0..(MAX_SEQ_LEN - input_len) {
-            // let tokenized_clone = tokenized.clone();
-
-            // Check if we're approaching the maximum sequence length
             if output_tokens.len() >= MAX_SEQ_LEN - 1 {
                 break;
             }
@@ -223,7 +222,6 @@ impl LLM {
 
             let logits = input;
 
-            // Safety check: ensure we have at least one token
             if logits.shape()[0] == 0 {
                 break;
             }
@@ -233,11 +231,8 @@ impl LLM {
                 .to_owned()
                 .insert_axis(Axis(0));
 
-            // Softmax - convert activations of each token to a probability distribution over the
-            // vocabulary
-            let probs = Self::softmax(&last_logit); // 1 x vocab_size
+            let probs = Self::softmax(&last_logit);
 
-            // Greedy Decode - Choose the highest probability token for each position
             let tokens = Self::greedy_decode(&probs);
 
             let next_token = tokens[tokens.len() - 1];
@@ -254,17 +249,18 @@ impl LLM {
     }
 
     pub fn train(&mut self, data: Vec<&str>, epochs: usize, initial_lr: f32) {
+        self.set_training_mode(true);
+
         let tokenized_data = data
             .iter()
             .map(|input| self.tokenize(input))
             .collect::<Vec<Vec<usize>>>();
 
         for epoch in 0..epochs {
-            // Implement learning rate decay: lr = initial_lr * (decay_rate ^ (epoch / decay_steps))
             let decay_rate: f32 = 0.95;
-            let decay_steps = 10.0; // Adjust this to control the decay speed
+            let decay_steps = 10.0;
             let current_lr = initial_lr * decay_rate.powf(epoch as f32 / decay_steps);
-            
+
             let mut total_loss = 0.0;
             for training_row in &tokenized_data {
                 if training_row.len() < 2 {
@@ -293,7 +289,6 @@ impl LLM {
                 // Backward pass
                 let mut grads_output = Self::compute_gradients_step(&probs, target_ids); // this is d_L/d_output_projection
 
-                // Apply gradient clipping BEFORE backpropagation
                 Self::clip_gradients(&mut grads_output, 5.0);
 
                 for layer in self.network.iter_mut().rev() {
@@ -315,6 +310,8 @@ impl LLM {
                 current_lr
             );
         }
+
+        self.set_training_mode(false);
     }
 
     /// Add tokens to the context window, maintaining the maximum length
@@ -335,11 +332,13 @@ impl LLM {
     }
     
     /// Get current context as token IDs
+    #[allow(dead_code)]
     pub fn get_context(&self) -> &[usize] {
         &self.context_window
     }
     
     /// Set a fixed context
+    #[allow(dead_code)]
     pub fn set_context(&mut self, tokens: Vec<usize>) {
         self.context_window = tokens;
         // Ensure context doesn't exceed maximum length
@@ -422,21 +421,41 @@ impl LLM {
     }
 
     fn softmax(logits: &Array2<f32>) -> Array2<f32> {
-        // logits is seq_len x vocab_size
         let mut result = logits.clone();
 
-        // Apply softmax row-wise
         for mut row in result.rows_mut() {
-            // Calculate exp for each element
             let max_val = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-            // Apply exp to each element in place to avoid extra allocation
             row.mapv_inplace(|x| (x - max_val).exp());
             let sum_exp: f32 = row.sum();
-            // Normalize by sum in place
-            row.mapv_inplace(|x| x / sum_exp);
+            row.mapv_inplace(|x| x / sum_exp.max(1e-12));
         }
 
         result
+    }
+
+    fn apply_temperature(probs: &Array2<f32>, temperature: f32) -> Array2<f32> {
+        if temperature <= 0.0 {
+            return probs.clone();
+        }
+
+        let power = 1.0 / temperature;
+        let mut adjusted = probs.clone();
+
+        for mut row in adjusted.rows_mut() {
+            let mut sum = 0.0;
+            for value in row.iter_mut() {
+                *value = (*value).max(1e-12).powf(power);
+                sum += *value;
+            }
+
+            if sum > 0.0 {
+                for value in row.iter_mut() {
+                    *value /= sum;
+                }
+            }
+        }
+
+        adjusted
     }
 
     fn greedy_decode(probs: &Array2<f32>) -> Vec<usize> {
@@ -542,32 +561,28 @@ impl LLM {
     
     /// Sample from a probability distribution
     fn sample_from_probs(&self, probs: &[f32]) -> usize {
-        let mut rng = rand::thread_rng();
+        let mut rng = rng();
         let sum: f32 = probs.iter().sum();
-        
+
         if sum == 0.0 {
-            // If all probabilities are zero, return a random token
             return rng.random_range(0..probs.len());
         }
-        
-        // Normalize the probabilities
+
         let mut normalized_probs = Vec::new();
         let mut cumsum = 0.0;
-        
+
         for &prob in probs {
             cumsum += prob / sum;
             normalized_probs.push(cumsum);
         }
-        
-        // Generate a random number and find the corresponding token
+
         let rand_val: f32 = rng.random();
         for (i, &cum_prob) in normalized_probs.iter().enumerate() {
             if rand_val <= cum_prob {
                 return i;
             }
         }
-        
-        // Fallback: return the last token if no match (shouldn't happen due to floating point errors)
+
         probs.len() - 1
     }
     
@@ -655,25 +670,22 @@ impl LLM {
     }
     
     /// Generate text based on the given context tokens
-    fn generate_with_context(&mut self, context_tokens: &[usize], top_p: f32, top_k: usize) -> String {
+    fn generate_with_context(&mut self, context_tokens: &[usize], temperature: f32, top_p: f32, top_k: usize) -> String {
         let mut tokenized = context_tokens.to_vec();
         let mut output_tokens: Vec<usize> = Vec::new();
 
-        // Safety check: ensure we have at least one token
         if tokenized.is_empty() {
             return String::new();
         }
 
         let input_len = tokenized.len();
 
-        // Prevent overflow if input_len >= MAX_SEQ_LEN
         if input_len >= MAX_SEQ_LEN {
             return String::new();
         }
 
-        // Generate a limited number of tokens (e.g., up to 20)
         let max_new_tokens = 20.min(MAX_SEQ_LEN - input_len);
-        
+
         for _ in 0..max_new_tokens {
             let token_input = Array2::from_shape_vec(
                 (1, tokenized.len()),
@@ -688,7 +700,6 @@ impl LLM {
 
             let logits = input;
 
-            // Safety check: ensure we have at least one token
             if logits.shape()[0] == 0 {
                 break;
             }
@@ -698,12 +709,15 @@ impl LLM {
                 .to_owned()
                 .insert_axis(Axis(0));
 
-            // Softmax - convert activations of each token to a probability distribution over the
-            // vocabulary
-            let probs = Self::softmax(&last_logit); // 1 x vocab_size
+            let probs = Self::softmax(&last_logit);
 
-            // Use top-p (nucleus) sampling instead of greedy decode
-            let tokens = self.top_p_sampling(&probs, top_p);
+            let adjusted_probs = Self::apply_temperature(&probs, temperature);
+
+            let tokens = if top_k > 0 {
+                self.top_k_sampling(&adjusted_probs, top_k)
+            } else {
+                self.top_p_sampling(&adjusted_probs, top_p)
+            };
 
             let next_token = tokens[tokens.len() - 1];
 
@@ -711,11 +725,10 @@ impl LLM {
             tokenized.push(next_token);
 
             if next_token == self.vocab.encode("</s>").unwrap() {
-                break; // Stop if we encounter an end token
+                break;
             }
         }
 
-        // Convert token_ids to strings
         let token_strs = output_tokens
             .iter()
             .map(|t| self.vocab.decode[t].clone())
@@ -726,7 +739,7 @@ impl LLM {
     }
     
     /// Post-process generated Chinese text to improve fluency and accuracy
-    fn post_process_chinese_text(&self, text: &str) -> String {
+    pub fn post_process_chinese_text(&self, text: &str) -> String {
         // Remove extra spaces between Chinese characters
         let mut result = String::new();
         let mut chars = text.chars().peekable();

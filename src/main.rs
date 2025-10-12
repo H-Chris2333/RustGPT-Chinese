@@ -1,6 +1,3 @@
-#![allow(unused_imports)]
-#![allow(unused_variables)]
-
 use std::io::Write;
 
 use ::llm::{EMBEDDING_DIM, HIDDEN_DIM, MAX_SEQ_LEN};
@@ -69,10 +66,12 @@ fn main() {
             Box::new(transformer_block_1),
             Box::new(transformer_block_2),
             Box::new(transformer_block_3),
-            Box::new(transformer_block_4),  // Added the fourth transformer block
+            Box::new(transformer_block_4),
             Box::new(output_projection),
         ],
     );
+
+    llm.set_training_mode(true);
 
     println!("\n=== MODEL INFORMATION ===");
     println!("Network architecture: {}", llm.network_description());
@@ -121,40 +120,38 @@ fn main() {
 
     println!("\n=== AFTER TRAINING ===");
     println!("Input: {}", string);
-    let result = llm.predict(&string);
+    llm.set_training_mode(false);
+    let result = llm.predict_with_beam_search(&string, 3, 20);
     println!("Output: {}", result);
     println!("======================\n");
 
-    // Interactive mode for user input
     println!("\n--- Interactive Mode ---");
     println!("Type a prompt and press Enter to generate text.");
     println!("Type 'exit' to quit.");
 
     let mut input = String::new();
     loop {
-        // Clear the input string
         input.clear();
 
-        // Prompt for user input
         print!("\nEnter prompt: ");
         std::io::stdout().flush().unwrap();
 
-        // Read user input
         std::io::stdin()
             .read_line(&mut input)
             .expect("Failed to read input");
 
-        // Trim whitespace and check for exit command
         let trimmed_input = input.trim();
         if trimmed_input.eq_ignore_ascii_case("exit") {
             println!("Exiting interactive mode.");
             break;
         }
 
-        // Generate prediction based on user input with "User:" prefix
         let formatted_input = format!("User: {}", trimmed_input);
-        // Use context-aware prediction for more coherent conversations
-        let prediction = llm.predict_with_context(&formatted_input, 1.0, 0.9, 5);
+        let prediction = llm.predict_with_context(&formatted_input, 0.8, 0.9, 5);
+        println!("Model output: {}", prediction);
+        if prediction.contains("</s>") {
+            llm.clear_context();
+        }
         println!("Model output: {}", prediction);
     }
 }

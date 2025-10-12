@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -53,19 +53,26 @@ impl Vocab {
         let mut decode = HashMap::new();
 
         // Add special tokens first with their predefined IDs
+        println!("Adding special tokens to vocabulary:");
         for (token, id) in &special_tokens {
             encode.insert(token.clone(), *id);
             decode.insert(*id, token.clone());
+            println!("  Added special token: '{}' with ID {}", token, id);
         }
 
         // Add remaining words starting from the next available ID
+        println!("Adding regular vocabulary words:");
         let mut next_id = special_tokens.values().max().unwrap_or(&0) + 1;
-        for word in words {
+        for word in words.iter() {
             let word_str = word.to_string();
             if !encode.contains_key(&word_str) {
                 encode.insert(word_str.clone(), next_id);
                 decode.insert(next_id, word_str.clone());
+                println!("  Added word: '{}' with ID {}", word_str, next_id);
                 next_id += 1;
+            } else {
+                // If the word already exists (e.g., as a special token), skip it
+                println!("  Skipped duplicate word: '{}' (already exists with ID {})", word_str, encode[&word_str]);
             }
         }
 
@@ -184,14 +191,18 @@ impl Vocab {
 
     /// Process text data to extract vocabulary words and add them to the vocabulary set
     pub fn process_text_for_vocab(texts: &[String], vocab_set: &mut HashSet<String>) {
-        // Add default special tokens
+        let mut vocab_log = String::new();
+        let mut idiom_writer = std::io::BufWriter::new(std::io::sink());
+
         vocab_set.insert("<|pad|>".to_string());
         vocab_set.insert("<|unk|>".to_string());
         vocab_set.insert("<|bos|>".to_string());
-        vocab_set.insert("</s>".to_string());  // End of sequence
+        vocab_set.insert("</s>".to_string());
         vocab_set.insert("<|sep|>".to_string());
         vocab_set.insert("<|cls|>".to_string());
         vocab_set.insert("<|mask|>".to_string());
+
+        vocab_log.push_str("Initialized special tokens.\n");
 
         // Initialize Jieba tokenizer
         let jieba = Jieba::new();
@@ -206,10 +217,12 @@ impl Vocab {
                 let tokens = jieba.cut(text, false);
                 for token in tokens {
                     if !token.trim().is_empty() {
-                        vocab_set.insert(token.trim().to_string());
+                        let token_trimmed = token.trim().to_string();
+                        vocab_log.push_str(&format!("Token: {}\n", token_trimmed));
+                        vocab_set.insert(token_trimmed);
                     }
                 }
-                
+
                 // Process common Chinese idioms and phrases that might be missed by Jieba
                 Self::extract_chinese_phrases(text, vocab_set);
             } else {
@@ -220,20 +233,25 @@ impl Vocab {
                     for c in word.chars() {
                         if c.is_ascii_punctuation() {
                             if !current.is_empty() {
+                                vocab_log.push_str(&format!("Word: {}\n", current));
                                 vocab_set.insert(current.clone());
                                 current.clear();
                             }
+                            vocab_log.push_str(&format!("Punctuation: {}\n", c));
                             vocab_set.insert(c.to_string());
                         } else {
                             current.push(c);
                         }
                     }
                     if !current.is_empty() {
+                        vocab_log.push_str(&format!("Word: {}\n", current));
                         vocab_set.insert(current);
                     }
                 }
             }
         }
+
+        let _ = writeln!(idiom_writer, "{}", vocab_log);
     }
     
     /// Extract common Chinese phrases and idioms that might be missed by simple tokenization

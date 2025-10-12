@@ -1,7 +1,7 @@
 use ndarray::Array2;
 use rand_distr::{Distribution, Normal};
 
-use crate::{EMBEDDING_DIM, MAX_SEQ_LEN, adam::Adam, llm::Layer, position_encoding::PositionEncoding, semantic_enhancer::SemanticEnhancer, vocab::Vocab};
+use crate::{EMBEDDING_DIM, adam::Adam, llm::Layer, position_encoding::PositionEncoding, semantic_enhancer::SemanticEnhancer, vocab::Vocab};
 
 pub struct Embeddings {
     pub token_embeddings: Array2<f32>,
@@ -37,7 +37,7 @@ impl Embeddings {
 
     fn init_embeddings(vocab_size: usize, embedding_dim: usize) -> Array2<f32> {
         let mut rng = rand::rng();
-        let normal = Normal::new(0.0, 0.02).unwrap(); // Increased for better learning
+        let normal = Normal::new(0.0, 0.02).unwrap();
         Array2::from_shape_fn((vocab_size, embedding_dim), |_| normal.sample(&mut rng))
     }
 
@@ -77,12 +77,10 @@ impl Layer for Embeddings {
     }
 
     fn forward(&mut self, input: &Array2<f32>) -> Array2<f32> {
-        // input shape is [1, sequence_length]
         self.cached_input = Some(input.clone());
         let token_ids: Vec<usize> = input.iter().map(|&x| x as usize).collect();
-        let embeddings = self.embed_tokens(&token_ids); // shape is [sequence_length, embedding_dim]
-        
-        // Apply semantic enhancement
+        let embeddings = self.embed_tokens(&token_ids);
+
         self.semantic_enhancer.enhance_embeddings(&embeddings, &token_ids)
     }
 
@@ -119,6 +117,8 @@ impl Layer for Embeddings {
     }
 
     fn parameters(&self) -> usize {
-        self.token_embeddings.len()  // Only token embeddings are trainable, positional encoding is fixed
+        self.token_embeddings.len()
     }
+
+    fn set_training_mode(&mut self, _training: bool) {}
 }
