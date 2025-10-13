@@ -216,7 +216,6 @@ fn train_new_model(perf_monitor: &mut PerformanceMonitor) -> LLM {
         ],
     );
 
-    llm.set_training_mode(true);
     perf_monitor.stop("初始化神经网络");
 
     println!("\n╔═══════════════════════════════════════════════════════════╗");
@@ -227,7 +226,24 @@ fn train_new_model(perf_monitor: &mut PerformanceMonitor) -> LLM {
         MAX_SEQ_LEN, EMBEDDING_DIM, HIDDEN_DIM);
     println!("  • 总参数量: {}", llm.total_parameters());
 
+    // 训练前测试
+    println!("\n╔═══════════════════════════════════════════════════════════╗");
+    println!("║                  训练前模型测试                           ║");
+    println!("╚═══════════════════════════════════════════════════════════╝");
+
+    let test_input = String::from("用户：山脉是如何形成的？");
+    println!("\n测试输入: {}", test_input);
+
+    llm.set_training_mode(false);
+    perf_monitor.start("训练前预测");
+    let before_output = llm.predict_with_beam_search(&test_input, 3, 20);
+    perf_monitor.stop("训练前预测");
+
+    println!("训练前输出: {}\n", before_output);
+
     // 预训练
+    llm.set_training_mode(true);
+
     println!("\n╔═══════════════════════════════════════════════════════════╗");
     println!("║              阶段1: 预训练 (Pre-training)                 ║");
     println!("╚═══════════════════════════════════════════════════════════╝");
