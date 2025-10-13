@@ -19,9 +19,9 @@ fn test_dataset_new_json() {
     );
     assert_eq!(
         dataset.pretraining_data[0],
-        "The sun rises in the east and sets in the west </s>"
+        "太阳从东方升起，在西方落下 </s>"
     );
-    assert!(dataset.chat_training_data[0].starts_with("User: What causes rain?"));
+    assert!(dataset.chat_training_data[0].starts_with("User: 什么是雨？"));
 }
 
 #[test]

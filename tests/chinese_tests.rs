@@ -5,7 +5,7 @@ mod chinese_language_tests {
     #[test]
     fn test_chinese_tokenization_basic() {
         let vocab = Vocab::default();
-        let mut llm = LLM::new(vocab, vec![]);
+        let llm = LLM::new(vocab, vec![]);
         
         // Test basic Chinese tokenization
         let text = "我爱中文";
@@ -18,7 +18,7 @@ mod chinese_language_tests {
     #[test]
     fn test_chinese_punctuation_handling() {
         let vocab = Vocab::default();
-        let mut llm = LLM::new(vocab, vec![]);
+        let llm = LLM::new(vocab, vec![]);
         
         // Test Chinese punctuation handling
         let text = "你好，世界！";
@@ -31,7 +31,7 @@ mod chinese_language_tests {
     #[test]
     fn test_chinese_idiom_recognition() {
         let vocab = Vocab::default();
-        let mut llm = LLM::new(vocab, vec![]);
+        let llm = LLM::new(vocab, vec![]);
         
         // Test recognition of a simple idiom/phrase
         let text = "一心一意";
@@ -44,7 +44,7 @@ mod chinese_language_tests {
     #[test]
     fn test_mixed_chinese_english_tokenization() {
         let vocab = Vocab::default();
-        let mut llm = LLM::new(vocab, vec![]);
+        let llm = LLM::new(vocab, vec![]);
         
         // Test mixed Chinese-English text
         let text = "我爱AI人工智能";
@@ -150,7 +150,7 @@ mod chinese_model_evaluation_tests {
     fn test_chinese_generation_quality() {
         // Test to ensure the model generates coherent Chinese text
         let vocab = Vocab::default();
-        let mut llm = LLM::new(vocab, vec![]);
+        let llm = LLM::new(vocab, vec![]);
         
         // This test would involve actually running the model
         // For now, we just verify the structure is in place
@@ -160,7 +160,7 @@ mod chinese_model_evaluation_tests {
     #[test]
     fn test_chinese_grammar_structures() {
         let vocab = Vocab::default();
-        let mut llm = LLM::new(vocab, vec![]);
+        let llm = LLM::new(vocab, vec![]);
         
         // Test with simple grammar pattern
         let tokens = llm.tokenize("我想要学习中文");
