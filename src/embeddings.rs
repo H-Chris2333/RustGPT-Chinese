@@ -1,12 +1,11 @@
 use ndarray::Array2;
 use rand_distr::{Distribution, Normal};
 
-use crate::{EMBEDDING_DIM, adam::Adam, llm::Layer, position_encoding::PositionEncoding, semantic_enhancer::SemanticEnhancer, vocab::Vocab};
+use crate::{EMBEDDING_DIM, adam::Adam, llm::Layer, position_encoding::PositionEncoding, vocab::Vocab};
 
 pub struct Embeddings {
     pub token_embeddings: Array2<f32>,
     pub position_encoder: PositionEncoding,
-    pub semantic_enhancer: SemanticEnhancer,
     pub cached_input: Option<Array2<f32>>,
     pub token_optimizer: Adam,
 }
@@ -17,7 +16,6 @@ impl Default for Embeddings {
         Self {
             token_embeddings: Self::init_embeddings(vocab.words.len(), EMBEDDING_DIM),
             position_encoder: PositionEncoding::new(),
-            semantic_enhancer: SemanticEnhancer::new(vocab.clone()),
             cached_input: None,
             token_optimizer: Adam::new((vocab.words.len(), EMBEDDING_DIM)),
         }
@@ -29,7 +27,6 @@ impl Embeddings {
         Self {
             token_embeddings: Self::init_embeddings(vocab.words.len(), EMBEDDING_DIM),
             position_encoder: PositionEncoding::new(),
-            semantic_enhancer: SemanticEnhancer::new(vocab.clone()),
             cached_input: None,
             token_optimizer: Adam::new((vocab.words.len(), EMBEDDING_DIM)),
         }
@@ -79,9 +76,7 @@ impl Layer for Embeddings {
     fn forward(&mut self, input: &Array2<f32>) -> Array2<f32> {
         self.cached_input = Some(input.clone());
         let token_ids: Vec<usize> = input.iter().map(|&x| x as usize).collect();
-        let embeddings = self.embed_tokens(&token_ids);
-
-        self.semantic_enhancer.enhance_embeddings(&embeddings, &token_ids)
+        self.embed_tokens(&token_ids)
     }
 
     fn backward(&mut self, grads: &Array2<f32>, lr: f32) -> Array2<f32> {

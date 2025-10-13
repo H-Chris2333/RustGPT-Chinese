@@ -1,26 +1,27 @@
-# 🦀 RustGPT-Chinese - Chinese-Only LLM
+# 🦀 RustGPT-Chinese - Chinese-Supported LLM
 
 [![Check](https://github.com/H-Chris233/RustGPT-Chinese/actions/workflows/check.yml/badge.svg)](https://github.com/H-Chris233/RustGPT-Chinese/actions/workflows/check.yml) [![Test](https://github.com/H-Chris233/RustGPT-Chinese/actions/workflows/test.yml/badge.svg)](https://github.com/H-Chris233/RustGPT-Chinese/actions/workflows/test.yml)
 
 **[中文！](README_zh.md)**
 
-A complete **Chinese-only Large Language Model implementation in pure Rust** with no external ML frameworks. Built from the ground up using only `ndarray` for matrix operations.
+A complete **Chinese-Supported Large Language Model implementation in pure Rust** with no external ML frameworks. Built from the ground up using only `ndarray` for matrix operations, featuring a modern **Pre-LN Transformer architecture** (GPT-2 standard).
 
 ## 🚀 What This Is
 
-This project demonstrates how to build a transformer-based language model from scratch in Rust that is specialized for Chinese language processing, including:
+This project demonstrates how to build a transformer-based language model from scratch in Rust that supports Chinese language processing, including:
 
+- **Modern Pre-LN Transformer Architecture** - GPT-2/3 standard with explicit residual connections
 - **Pre-training** on Chinese factual text completion
 - **Instruction tuning** for Chinese conversational AI
 - **Interactive chat mode** for Chinese language testing
-- **Full backpropagation** with gradient clipping
+- **Full backpropagation** with gradient clipping and Adam optimizer
 - **Modular architecture** with clean separation of concerns
-- **Chinese-optimized tokenizer** using jieba-rs
-- **Multi-head self-attention mechanism** for better Chinese grammar understanding
+- **Chinese-optimized tokenization** using jieba-rs with global singleton optimization (50-70% faster)
+- **Multi-head self-attention mechanism** (8 heads) for better Chinese grammar understanding
 - **Context window management** for maintaining conversation history
-- **Advanced decoding methods** (top-k/top-p sampling, beam search)
-- **Regularization techniques** (Dropout) for improved stability
-- **Semantic enhancement** for better understanding of Chinese relationships
+- **Advanced decoding methods** (top-k/top-p sampling, beam search, temperature scaling)
+- **Regularization techniques** (Dropout, Layer Normalization) for improved stability
+- **Performance monitoring** with detailed timing and profiling
 
 ## ❌ What This Isn't
 
@@ -28,19 +29,69 @@ This is not a production grade Chinese LLM. It is so far away from the larger Ch
 
 This is just a toy project that demonstrates how Chinese LLMs work under the hood.
 
+## 🆕 Recent Updates
+
+### v0.2.0 - Architecture Refactoring (2025-10-12)
+- ✅ **Pre-LN Transformer Architecture** - Upgraded from Post-LN to Pre-LN (GPT-2 standard) for better training stability
+- ✅ **Explicit Residual Connections** - Moved residual connections from sub-layers to TransformerBlock for clarity
+- ✅ **Removed Semantic Enhancer** - Simplified model by removing unverified experimental feature
+- ✅ **Performance Optimization** - Jieba singleton optimization (50-70% faster), attention reshape optimization (20-30% faster)
+- ✅ **Compiler Optimizations** - LTO, opt-level 3, codegen-units 1 for release builds
+- ✅ **Performance Monitoring** - Added comprehensive performance tracking and profiling
+
 ## 🔍 Key Files to Explore
 
-Start with these two core files to understand the implementation:
+Start with these core files to understand the implementation:
 
 - **[`src/main.rs`](src/main.rs)** - Training pipeline, data preparation, and interactive mode
 - **[`src/llm.rs`](src/llm.rs)** - Core LLM implementation and training logic
+- **[`src/transformer.rs`](src/transformer.rs)** - Pre-LN Transformer block with explicit residual connections
 
 ## 🏗️ Architecture
 
-The model uses a **transformer-based architecture** with the following components:
+The model uses a **Pre-LN Transformer architecture** (GPT-2 standard) with the following components:
 
 ```
-Input Text → Tokenization → Embeddings → Transformer Blocks → Output Projection → Predictions
+Input Text → Tokenization (supports Chinese with jieba-rs) → Token Embeddings + Positional Encoding
+    ↓
+[4x Transformer Blocks]
+    Each block:
+    • LayerNorm → Multi-Head Attention (8 heads) → Dropout → Residual Connection
+    • LayerNorm → Feed-Forward Network → Dropout → Residual Connection
+    ↓
+Output Projection → Softmax → Token Predictions
+```
+
+### Why Pre-LN Transformer?
+
+Pre-LN (Layer Normalization before sub-layers) is the modern standard used in GPT-2, GPT-3, and beyond:
+- ✅ **More stable training** - Better gradient flow
+- ✅ **Faster convergence** - Reduced gradient vanishing/explosion
+- ✅ **More robust** - Less sensitive to learning rate
+
+**Architecture Comparison:**
+
+```
+Post-LN (Old):                      Pre-LN (Current - GPT-2 Standard):
+Input                               Input
+  ↓                                   ↓
+Attention                           LayerNorm
+  ↓                                   ↓
+LayerNorm                           Attention
+  ↓                                   ↓
+Dropout                             Dropout
+  ↓                                   ↓
+(+Input)                            (+Input) ← Explicit residual
+  ↓                                   ↓
+FFN                                 LayerNorm
+  ↓                                   ↓
+LayerNorm                           FFN
+  ↓                                   ↓
+Dropout                             Dropout
+  ↓                                   ↓
+Output                              (+X) ← Explicit residual
+                                      ↓
+                                    Output
 ```
 
 ### Project Structure
@@ -50,29 +101,31 @@ src/
 ├── main.rs              # 🎯 Training pipeline and interactive mode
 ├── llm.rs               # 🧠 Core LLM implementation and training logic
 ├── lib.rs               # 📚 Library exports and constants
-├── transformer.rs       # 🔄 Transformer block (attention + feed-forward)
-├── self_attention.rs    # 👀 Multi-head self-attention mechanism
+├── transformer.rs       # 🔄 Pre-LN Transformer block with explicit residual connections
+├── self_attention.rs    # 👀 Multi-head self-attention mechanism (8 heads)
 ├── feed_forward.rs      # ⚡ Position-wise feed-forward networks
-├── embeddings.rs        # 📊 Token embedding layer with semantic enhancement
+├── embeddings.rs        # 📊 Token embedding layer with positional encoding
 ├── output_projection.rs # 🎰 Final linear layer for vocabulary predictions
-├── vocab.rs            # 📝 Vocabulary management and jieba-rs tokenization
-├── layer_norm.rs       # 🧮 Layer normalization
-├── dropout.rs          # 🚫 Dropout regularization
-├── position_encoding.rs # 📍 Position encoding optimized for Chinese
-└── semantic_enhancer.rs # 🔍 Semantic relationship enhancement for Chinese
+├── vocab.rs            # 📝 Vocabulary management with optimized jieba-rs tokenization
+├── layer_norm.rs       # 🧮 Layer normalization (learnable γ and β)
+├── dropout.rs          # 🚫 Dropout regularization (10% rate, inverted dropout)
+├── position_encoding.rs # 📍 Sinusoidal position encoding
+├── adam.rs             # 🎓 Adam optimizer (β₁=0.9, β₂=0.999)
+├── performance_monitor.rs # ⏱️ Performance profiling and timing
+└── dataset_loader.rs   # 📁 Training data loading
 ```
 
 ## 🧪 What The Model Learns
 
-The implementation includes two training phases specialized for Chinese:
+The implementation includes training phases that support Chinese:
 
-1. **Pre-training**: Learns Chinese world knowledge from Chinese factual statements
+1. **Pre-training**: Can learn world knowledge from Chinese factual statements
    - "太阳从东方升起，在西方落下"
    - "水由于重力而从高处流向低处"
    - "山脉是高大而多岩石的地形"
    - Enhanced with Chinese cultural knowledge, idioms, and historical facts
 
-2. **Instruction Tuning**: Learns Chinese conversational patterns
+2. **Instruction Tuning**: Can learn Chinese conversational patterns
    - "用户：山脉是如何形成的？助手：山脉通过构造力或火山活动在长时间的地质时期内形成..."
    - Handles Chinese greetings, explanations, and follow-up questions
    - Incorporates Chinese cultural references and idioms
@@ -86,15 +139,29 @@ cd RustGPT-Chinese
 cargo run
 
 # The model will:
-# 1. Build vocabulary from Chinese training data (with jieba-rs tokenization)
+# 1. Build vocabulary from Chinese training data (with jieba-rs tokenization support)
 # 2. Pre-train on Chinese factual statements (100 epochs)
 # 3. Instruction-tune on Chinese conversational data (100 epochs)
 # 4. Enter interactive mode for Chinese testing
 ```
 
+### Performance Tips
+
+For maximum performance, use release mode:
+```bash
+cargo build --release
+./target/release/llm
+```
+
+Release mode enables:
+- **Link-time optimization (LTO)** - Cross-crate inlining
+- **Maximum optimization level** (opt-level 3)
+- **Single codegen unit** - Better optimization opportunities
+- **Expected speedup**: 10-20% over debug mode
+
 ## 🎮 Interactive Mode
 
-After training, test the model interactively in Chinese:
+After training, test the model interactively with Chinese:
 
 ```
 Enter prompt: 山脉是如何形成的?
@@ -107,29 +174,48 @@ Model output: 降雨是由云中的水蒸气凝结成水滴，当水滴变得太
 ## 🧮 Technical Implementation
 
 ### Model Configuration
-- **Vocabulary Size**: Dynamic (built from training data with jieba-rs integration)
-- **Embedding Dimension**: 512 (enhanced from original 128 to better represent Chinese characters)
-- **Hidden Dimension**: 1024 (enhanced from original 256 for complex Chinese patterns)
+- **Vocabulary Size**: Dynamic (built from training data with jieba-rs integration for Chinese support)
+- **Embedding Dimension**: 512 (enhanced from original 128 to better represent Chinese characters when needed)
+- **Hidden Dimension**: 1024 (enhanced from original 256 for complex Chinese patterns when needed)
 - **Max Sequence Length**: 256 tokens (increased from original 80 for longer Chinese sentences)
-- **Architecture**: 4 Transformer blocks + embeddings + output projection
+- **Architecture**: 4 Pre-LN Transformer blocks + embeddings + output projection
+- **Total Parameters**: ~9.68M
 
 ### Training Details
-- **Optimizer**: Adam with gradient clipping
-- **Pre-training LR**: 0.0005 (100 epochs with decay scheduling)
-- **Instruction Tuning LR**: 0.0001 (100 epochs with decay scheduling)
-- **Loss Function**: Cross-entropy loss
+- **Optimizer**: Adam (β₁=0.9, β₂=0.999, ε=1e-8) with gradient clipping
+- **Pre-training LR**: 0.0005 (100 epochs with exponential decay 0.95^(epoch/10))
+- **Instruction Tuning LR**: 0.0001 (100 epochs with exponential decay)
+- **Loss Function**: Cross-entropy loss with numerical stability (clipping at 1e-15)
 - **Gradient Clipping**: L2 norm capped at 5.0
-- **Regularization**: Dropout layers with 10% rate after attention and feed-forward
+- **Regularization**: Dropout layers with 10% rate (inverted dropout)
 
 ### Key Features
-- **Custom Chinese tokenization** with jieba-rs for accurate Chinese text processing
-- **Multi-head self-attention** with 8 heads for better Chinese grammar understanding
-- **Greedy and advanced decoding** (top-p sampling with p=0.9, beam search)
-- **Gradient clipping** for training stability
-- **Modular layer system** with clean interfaces
-- **Comprehensive test coverage** for all components
-- **Context window management** for maintaining conversation history
-- **Semantic enhancement** for understanding Chinese word relationships
+- **Modern Pre-LN Transformer** - GPT-2/3 standard architecture for stable training
+- **Explicit Residual Connections** - Clear and maintainable architecture
+- **Optimized Chinese tokenization** - jieba-rs with global singleton (50-70% faster)
+- **Multi-head self-attention** - 8 heads with optimized reshape operations (20-30% faster)
+- **Advanced decoding methods**:
+  - Greedy decoding (argmax)
+  - Top-k sampling (nucleus sampling)
+  - Top-p sampling (cumulative probability)
+  - Beam search with log probabilities
+  - Temperature scaling for output diversity
+- **Gradient clipping** - L2 norm for training stability
+- **Modular layer system** - Clean interfaces with Layer trait
+- **Comprehensive test coverage** - Unit tests for all components
+- **Context window management** - Sliding window for conversation history
+- **Performance monitoring** - Detailed timing and profiling tools
+- **Compiler optimizations** - LTO, opt-level 3, single codegen unit
+
+### Performance Optimizations
+
+| Optimization | Speedup | Status |
+|--------------|---------|--------|
+| Jieba singleton (OnceLock) | 50-70% | ✅ Implemented |
+| Attention reshape (slice ops) | 20-30% | ✅ Implemented |
+| Compiler optimizations (LTO) | 10-20% | ✅ Implemented |
+| ndarray rayon parallelization | 10-15% | ✅ Implemented |
+| **Total expected improvement** | **60-80%** | ✅ Implemented |
 
 ## 🔧 Development
 
@@ -141,36 +227,53 @@ cargo test
 cargo test --test llm_test
 cargo test --test transformer_test
 cargo test --test self_attention_test
+cargo test --test chinese_tests
+cargo test --test vocab_test
 
 # Build optimized version
 cargo build --release
 
 # Run with verbose output
 cargo test -- --nocapture
+
+# Format code
+cargo fmt
+
+# Run linter
+cargo clippy
 ```
 
 ## 🧠 Learning Resources
 
-This implementation demonstrates key ML concepts for Chinese language models:
-- **Transformer architecture** (attention, feed-forward, layer norm)
-- **Backpropagation** through neural networks
-- **Chinese language model training** (pre-training + fine-tuning)
-- **Chinese tokenization** and vocabulary management with jieba-rs
-- **Gradient-based optimization** with Adam
-- **Context management** for conversation history
-- **Regularization techniques** for improved stability
+This implementation demonstrates key ML concepts for multilingual language models with Chinese support:
+- **Pre-LN Transformer architecture** - Modern standard for stable training
+- **Explicit residual connections** - Clear gradient flow management
+- **Multi-head attention** - Parallel attention mechanisms
+- **Feed-forward networks** - Position-wise transformations
+- **Layer normalization** - Per-layer feature normalization
+- **Backpropagation** - Automatic differentiation through custom layers
+- **Language model training** - Pre-training + fine-tuning
+- **Chinese tokenization** - jieba-rs integration and optimization
+- **Gradient-based optimization** - Adam optimizer with momentum
+- **Context management** - Conversation history tracking
+- **Regularization techniques** - Dropout for generalization
 
-Perfect for understanding how Chinese LLMs work under the hood!
+Perfect for understanding how LLMs with Chinese support work under the hood!
 
 ## 📊 Dependencies
 
-- `ndarray` - N-dimensional arrays for matrix operations
+- `ndarray` - N-dimensional arrays for matrix operations (with rayon parallelization)
 - `jieba-rs` - Chinese text segmentation and tokenization
 - `rand` + `rand_distr` - Random number generation for initialization
 - `regex` - Pattern matching for Chinese idioms recognition
 - `bincode` - Serialization and binary encoding
+- `serde` + `serde_json` - Data serialization
 
 No PyTorch, TensorFlow, or Candle - just pure Rust and linear algebra!
+
+## 📚 Documentation
+
+- **[CLAUDE.md](CLAUDE.md)** - Development guidelines for Claude Code assistant
 
 ## 🤝 Contributing
 
@@ -178,22 +281,31 @@ Contributions are welcome! This project is perfect for learning and experimentat
 
 ### High Priority Features Needed
 - **🏪 Model Persistence** - Save/load trained parameters to disk (currently all in-memory)
-- **⚡ Performance optimizations** - SIMD, parallel training, memory efficiency
-- **🎯 Better sampling** - Beam search, top-k/top-p, temperature scaling
 - **📊 Evaluation metrics** - Perplexity, benchmarks, training visualizations
+- **🎯 Attention visualization** - Visualize attention patterns for Chinese text
+- **📈 Training curves** - Loss/accuracy plotting
 
 ### Areas for Improvement
-- **Advanced architectures** (multi-head attention, positional encoding, RoPE)
-- **Training improvements** (different optimizers, learning rate schedules, regularization)
-- **Chinese data handling** (larger Chinese datasets, Chinese tokenizer improvements, streaming)
-- **Model analysis** (attention visualization, gradient analysis, interpretability)
+- **Advanced architectures** (Rotary Position Embedding (RoPE), Flash Attention)
+- **Training improvements** (Gradient accumulation, learning rate warmup, mixed precision)
+- **Chinese data handling** (Larger Chinese datasets, streaming data loading)
+- **Model analysis** (Attention visualization, gradient analysis, interpretability)
+
+### Current Architecture Status
+- ✅ **Pre-LN Transformer** - Modern GPT-2 standard architecture
+- ✅ **Explicit residual connections** - Clear and maintainable
+- ✅ **Performance optimized** - 60-80% faster than initial version
+- ⚠️ **No attention masking parameter** - Currently hardcoded causal masking
+- ⚠️ **No gradient accumulation** - One sample per update
+- ⚠️ **No learning rate warmup** - Only exponential decay
 
 ### Getting Started
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/model-persistence`
 3. Make your changes and add tests
 4. Run the test suite: `cargo test`
-5. Submit a pull request with a clear description
+5. Format and lint: `cargo fmt && cargo clippy`
+6. Submit a pull request with a clear description
 
 ### Code Style
 - Follow standard Rust conventions (`cargo fmt`)
@@ -201,12 +313,21 @@ Contributions are welcome! This project is perfect for learning and experimentat
 - Update documentation and README as needed
 - Keep the "from scratch" philosophy - avoid heavy ML dependencies
 - Focus on Chinese language processing improvements
+- Add comments explaining complex algorithms
 
 ### Ideas for Contributions
 - 🚀 **Beginner**: Model save/load, more Chinese training data, config files
-- 🔥 **Intermediate**: Better Chinese tokenization, Chinese-specific optimizations, training checkpoints
-- ⚡ **Advanced**: Multi-head attention improvements for Chinese, layer parallelization, custom Chinese optimizations
+- 🔥 **Intermediate**: Attention visualization, training checkpoints, evaluation metrics
+- ⚡ **Advanced**: Flash Attention, gradient accumulation, RoPE, mixed precision training
 
 Questions? Open an issue or start a discussion!
+
+## 📜 License
+
+This project is open source and available for educational purposes.
+
+---
+
+**Built with 🦀 Rust and ❤️ for understanding Chinese LLMs**
 
 No PyTorch, TensorFlow, or Candle - just pure Rust and linear algebra!

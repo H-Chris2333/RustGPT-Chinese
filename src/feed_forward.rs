@@ -4,20 +4,20 @@ use rand_distr::{Distribution, Normal};
 use crate::{adam::Adam, llm::Layer};
 
 pub struct FeedForward {
-    w1: Array2<f32>,
-    b1: Array2<f32>,
-    w2: Array2<f32>,
-    b2: Array2<f32>,
+    pub w1: Array2<f32>,
+    pub b1: Array2<f32>,
+    pub w2: Array2<f32>,
+    pub b2: Array2<f32>,
 
     // Cached values for backward pass
-    input: Option<Array2<f32>>,
-    hidden_pre_activation: Option<Array2<f32>>,
-    hidden_post_activation: Option<Array2<f32>>,
+    pub input: Option<Array2<f32>>,
+    pub hidden_pre_activation: Option<Array2<f32>>,
+    pub hidden_post_activation: Option<Array2<f32>>,
 
-    optimizer_w1: Adam,
-    optimizer_b1: Adam,
-    optimizer_w2: Adam,
-    optimizer_b2: Adam,
+    pub optimizer_w1: Adam,
+    pub optimizer_b1: Adam,
+    pub optimizer_w2: Adam,
+    pub optimizer_b2: Adam,
 }
 
 impl FeedForward {
@@ -74,14 +74,12 @@ impl Layer for FeedForward {
 
         let grad_input_feedforward = grad_hidden_pre_activation.dot(&self.w1.t());
 
-        let grad_input = grad_input_feedforward + grads;
-
         self.optimizer_w2.step(&mut self.w2, &grad_w2, lr);
         self.optimizer_b2.step(&mut self.b2, &grad_b2, lr);
         self.optimizer_w1.step(&mut self.w1, &grad_w1, lr);
         self.optimizer_b1.step(&mut self.b1, &grad_b1, lr);
 
-        grad_input
+        grad_input_feedforward
     }
 
     fn forward(&mut self, input: &Array2<f32>) -> Array2<f32> {
@@ -94,7 +92,7 @@ impl Layer for FeedForward {
         self.hidden_pre_activation = Some(hidden_pre_activation);
         self.hidden_post_activation = Some(hidden_post_activation);
 
-        output + input
+        output
     }
 
     fn parameters(&self) -> usize {

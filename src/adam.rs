@@ -1,10 +1,10 @@
 use ndarray::Array2;
 
 pub struct Adam {
-    beta1: f32,
-    beta2: f32,
-    epsilon: f32,
-    timestep: usize,
+    pub beta1: f32,
+    pub beta2: f32,
+    pub epsilon: f32,
+    pub timestep: usize,
     pub m: Array2<f32>,
     pub v: Array2<f32>,
 }
