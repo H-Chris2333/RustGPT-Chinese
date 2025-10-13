@@ -1,3 +1,18 @@
+mod adam;
+mod dataset_loader;
+mod dropout;
+mod embeddings;
+mod feed_forward;
+mod layer_norm;
+mod llm;
+mod model_serialization;
+mod output_projection;
+mod position_encoding;
+mod self_attention;
+mod transformer;
+mod vocab;
+mod performance_monitor;
+
 use std::io::Write;
 
 use ::llm::{EMBEDDING_DIM, HIDDEN_DIM, MAX_SEQ_LEN};
@@ -7,74 +22,188 @@ use crate::{
     embeddings::Embeddings, llm::LLM, output_projection::OutputProjection,
     transformer::TransformerBlock, vocab::Vocab,
     performance_monitor::PerformanceMonitor,
+    model_serialization::{save_model_binary, load_model_binary, save_model_json},
 };
 
-mod adam;
-mod dataset_loader;
-mod dropout;
-mod embeddings;
-mod feed_forward;
-mod layer_norm;
-mod llm;
-mod output_projection;
-mod position_encoding;
-mod semantic_enhancer;
-mod self_attention;
-mod transformer;
-mod vocab;
-mod performance_monitor;
-
 fn main() {
+    println!("\n╔═══════════════════════════════════════════════════════════╗");
+    println!("║         RustGPT-Chinese - 中文GPT模型训练系统            ║");
+    println!("╚═══════════════════════════════════════════════════════════╝\n");
+
     // 创建性能监控器
     let mut perf_monitor = PerformanceMonitor::new();
-
     perf_monitor.start("程序总执行时间");
 
-    // Mock input - test conversational format
-    let string = String::from("用户：山脉是如何形成的？");
+    // 检查是否存在已保存的模型
+    let model_path = "checkpoints/model_final.bin";
+    let pretrain_checkpoint = "checkpoints/model_pretrained.bin";
 
+    let mut llm = if std::path::Path::new(model_path).exists()
+        || std::path::Path::new(pretrain_checkpoint).exists() {
+
+        println!("🔍 检测到已保存的模型:");
+        if std::path::Path::new(model_path).exists() {
+            println!("  ✓ {}", model_path);
+        }
+        if std::path::Path::new(pretrain_checkpoint).exists() {
+            println!("  ✓ {}", pretrain_checkpoint);
+        }
+        println!();
+
+        print!("是否加载已有模型? (y/n): ");
+        std::io::stdout().flush().unwrap();
+
+        let mut choice = String::new();
+        std::io::stdin().read_line(&mut choice).unwrap();
+
+        if choice.trim().eq_ignore_ascii_case("y") {
+            // 选择加载哪个模型
+            let load_path = if std::path::Path::new(model_path).exists() {
+                print!("\n选择要加载的模型:\n  1) {} (最终模型)\n  2) {} (预训练checkpoint)\n请选择 (1/2): ",
+                    model_path, pretrain_checkpoint);
+                std::io::stdout().flush().unwrap();
+
+                let mut model_choice = String::new();
+                std::io::stdin().read_line(&mut model_choice).unwrap();
+
+                if model_choice.trim() == "2" && std::path::Path::new(pretrain_checkpoint).exists() {
+                    pretrain_checkpoint
+                } else {
+                    model_path
+                }
+            } else {
+                pretrain_checkpoint
+            };
+
+            println!("\n📂 正在加载模型: {}...", load_path);
+            perf_monitor.start("加载模型");
+
+            match load_model_binary(load_path) {
+                Ok(mut loaded_llm) => {
+                    perf_monitor.stop("加载模型");
+                    loaded_llm.set_training_mode(false);
+
+                    println!("\n✅ 模型加载成功!");
+                    println!("  • 词汇量: {}", loaded_llm.vocab.len());
+                    println!("  • 总参数: {}", loaded_llm.total_parameters());
+                    println!("  • 网络架构: {}", loaded_llm.network_description());
+
+                    // 询问是否继续训练
+                    print!("\n是否继续训练此模型? (y/n): ");
+                    std::io::stdout().flush().unwrap();
+
+                    let mut train_choice = String::new();
+                    std::io::stdin().read_line(&mut train_choice).unwrap();
+
+                    if train_choice.trim().eq_ignore_ascii_case("y") {
+                        continue_training_loaded_model(loaded_llm, &mut perf_monitor)
+                    } else {
+                        println!("\n✓ 跳过训练，直接进入交互模式");
+                        loaded_llm
+                    }
+                }
+                Err(e) => {
+                    println!("\n❌ 加载模型失败: {}", e);
+                    println!("将重新训练模型...\n");
+                    train_new_model(&mut perf_monitor)
+                }
+            }
+        } else {
+            println!("\n🔄 将训练新模型...\n");
+            train_new_model(&mut perf_monitor)
+        }
+    } else {
+        println!("📝 未检测到已保存的模型，将开始训练新模型...\n");
+        train_new_model(&mut perf_monitor)
+    };
+
+    // 训练完成后询问是否保存
+    println!("\n╔═══════════════════════════════════════════════════════════╗");
+    println!("║                    模型保存选项                           ║");
+    println!("╚═══════════════════════════════════════════════════════════╝\n");
+
+    print!("是否保存当前模型? (y/n): ");
+    std::io::stdout().flush().unwrap();
+
+    let mut save_choice = String::new();
+    std::io::stdin().read_line(&mut save_choice).unwrap();
+
+    if save_choice.trim().eq_ignore_ascii_case("y") {
+        save_model_interactive(&llm);
+    } else {
+        println!("✓ 跳过保存");
+    }
+
+    // 测试模型
+    println!("\n╔═══════════════════════════════════════════════════════════╗");
+    println!("║                    模型测试                               ║");
+    println!("╚═══════════════════════════════════════════════════════════╝\n");
+
+    let test_input = String::from("用户：山脉是如何形成的？");
+    println!("测试输入: {}", test_input);
+
+    llm.set_training_mode(false);
+    perf_monitor.start("测试预测 (Beam Search)");
+    let result = llm.predict_with_beam_search(&test_input, 3, 20);
+    perf_monitor.stop("测试预测 (Beam Search)");
+
+    println!("模型输出: {}", result);
+
+    perf_monitor.stop("程序总执行时间");
+
+    // 打印性能报告
+    println!("\n╔═══════════════════════════════════════════════════════════╗");
+    println!("║                    性能报告                               ║");
+    println!("╚═══════════════════════════════════════════════════════════╝\n");
+    perf_monitor.print_report();
+
+    // 进入交互模式
+    interactive_mode(&mut llm);
+}
+
+/// 训练新模型
+fn train_new_model(perf_monitor: &mut PerformanceMonitor) -> LLM {
     perf_monitor.start("加载训练数据");
     let dataset = Dataset::new(
         String::from("data/pretraining_data.json"),
         String::from("data/chat_training_data.json"),
         DatasetType::JSON,
-    ); // Placeholder, not used in this example
+    );
     perf_monitor.stop("加载训练数据");
 
-    // Extract all unique words from training data to create vocabulary
+    // 构建词汇表
     let mut vocab_set = std::collections::HashSet::new();
 
-    // Process all training examples for vocabulary
-    // First process pre-training data
     perf_monitor.start("构建词汇表 - 预训练数据");
-    println!("Processing pre-training data for vocabulary...");
+    println!("📝 处理预训练数据构建词汇表...");
     Vocab::process_text_for_vocab(&dataset.pretraining_data, &mut vocab_set);
-    println!("Added tokens from pre-training data. Current vocabulary size: {}", vocab_set.len());
+    println!("✓ 预训练数据处理完成，当前词汇量: {}", vocab_set.len());
     perf_monitor.stop("构建词汇表 - 预训练数据");
 
-    // Then process chat training data
     perf_monitor.start("构建词汇表 - 对话数据");
-    println!("Processing chat training data for vocabulary...");
+    println!("📝 处理对话数据构建词汇表...");
     Vocab::process_text_for_vocab(&dataset.chat_training_data, &mut vocab_set);
-    println!("Added tokens from chat training data. Final vocabulary size: {}", vocab_set.len());
+    println!("✓ 对话数据处理完成，最终词汇量: {}", vocab_set.len());
     perf_monitor.stop("构建词汇表 - 对话数据");
 
     perf_monitor.start("创建词汇表对象");
     let mut vocab_words: Vec<String> = vocab_set.into_iter().collect();
-    vocab_words.sort(); // Sort for deterministic ordering
-    println!("Creating vocabulary with {} unique tokens...", vocab_words.len());
-    let vocab_words_refs: Vec<&str> = vocab_words.iter().map(|s: &String| s.as_str()).collect();
+    vocab_words.sort();
+    println!("📚 创建词汇表，共 {} 个唯一词元...", vocab_words.len());
+    let vocab_words_refs: Vec<&str> = vocab_words.iter().map(|s| s.as_str()).collect();
     let vocab = Vocab::new(vocab_words_refs);
-    println!("Vocabulary created successfully with {} total tokens (including special tokens)", vocab.len());
+    println!("✓ 词汇表创建成功，总计 {} 个词元 (含特殊词元)", vocab.len());
     perf_monitor.stop("创建词汇表对象");
 
     perf_monitor.start("初始化神经网络");
+    println!("\n🏗️  初始化神经网络...");
     let transformer_block_1 = TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM);
     let transformer_block_2 = TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM);
     let transformer_block_3 = TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM);
-    let transformer_block_4 = TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM); // Added extra transformer block for better Chinese understanding
+    let transformer_block_4 = TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM);
     let output_projection = OutputProjection::new(EMBEDDING_DIM, vocab.words.len());
     let embeddings = Embeddings::new(vocab.clone());
+
     let mut llm = LLM::new(
         vocab,
         vec![
@@ -90,28 +219,21 @@ fn main() {
     llm.set_training_mode(true);
     perf_monitor.stop("初始化神经网络");
 
-    println!("\n=== MODEL INFORMATION ===");
-    println!("Network architecture: {}", llm.network_description());
-    println!(
-        "Model configuration -> max_seq_len: {}, embedding_dim: {}, hidden_dim: {}",
-        MAX_SEQ_LEN, EMBEDDING_DIM, HIDDEN_DIM
-    );
+    println!("\n╔═══════════════════════════════════════════════════════════╗");
+    println!("║                    模型信息                               ║");
+    println!("╚═══════════════════════════════════════════════════════════╝");
+    println!("  • 网络架构: {}", llm.network_description());
+    println!("  • 配置: max_seq_len={}, embedding_dim={}, hidden_dim={}",
+        MAX_SEQ_LEN, EMBEDDING_DIM, HIDDEN_DIM);
+    println!("  • 总参数量: {}", llm.total_parameters());
 
-    println!("Total parameters: {}", llm.total_parameters());
-
-    println!("\n=== BEFORE TRAINING ===");
-    perf_monitor.start("训练前预测");
-    println!("Input: {}", string);
-    println!("Output: {}", llm.predict(&string));
-    perf_monitor.stop("训练前预测");
-
-    println!("\n=== PRE-TRAINING MODEL ===");
-    println!(
-        "Pre-training on {} examples for {} epochs with learning rate {}",
-        dataset.pretraining_data.len(),
-        100,
-        0.0005
-    );
+    // 预训练
+    println!("\n╔═══════════════════════════════════════════════════════════╗");
+    println!("║              阶段1: 预训练 (Pre-training)                 ║");
+    println!("╚═══════════════════════════════════════════════════════════╝");
+    println!("  • 训练样本: {}", dataset.pretraining_data.len());
+    println!("  • 训练轮数: 100 epochs");
+    println!("  • 学习率: 0.0005\n");
 
     let pretraining_examples: Vec<&str> = dataset
         .pretraining_data
@@ -119,53 +241,175 @@ fn main() {
         .map(|s| s.as_str())
         .collect();
 
+    perf_monitor.start("预训练阶段");
+    llm.train(pretraining_examples, 100, 0.0005);
+    perf_monitor.stop("预训练阶段");
+
+    // 询问是否保存预训练checkpoint
+    print!("\n💾 是否保存预训练checkpoint? (y/n): ");
+    std::io::stdout().flush().unwrap();
+
+    let mut checkpoint_choice = String::new();
+    std::io::stdin().read_line(&mut checkpoint_choice).unwrap();
+
+    if checkpoint_choice.trim().eq_ignore_ascii_case("y") {
+        std::fs::create_dir_all("checkpoints").ok();
+        match save_model_binary(&llm, "checkpoints/model_pretrained.bin") {
+            Ok(_) => println!("✓ 预训练checkpoint已保存"),
+            Err(e) => println!("❌ 保存失败: {}", e),
+        }
+    }
+
+    // 指令微调
+    println!("\n╔═══════════════════════════════════════════════════════════╗");
+    println!("║            阶段2: 指令微调 (Instruction Tuning)          ║");
+    println!("╚═══════════════════════════════════════════════════════════╝");
+    println!("  • 训练样本: {}", dataset.chat_training_data.len());
+    println!("  • 训练轮数: 100 epochs");
+    println!("  • 学习率: 0.0001\n");
+
     let chat_training_examples: Vec<&str> = dataset
         .chat_training_data
         .iter()
         .map(|s| s.as_str())
         .collect();
 
-    perf_monitor.start("预训练阶段");
-    llm.train(pretraining_examples, 100, 0.0005); // Pre-training with learning rate scheduling
-    perf_monitor.stop("预训练阶段");
-
-    println!("\n=== INSTRUCTION TUNING ===");
-    println!(
-        "Instruction tuning on {} examples for {} epochs with learning rate {}",
-        dataset.chat_training_data.len(),
-        100,
-        0.0001
-    );
-
     perf_monitor.start("指令微调阶段");
-    llm.train(chat_training_examples, 100, 0.0001); // Instruction tuning with learning rate scheduling
+    llm.train(chat_training_examples, 100, 0.0001);
     perf_monitor.stop("指令微调阶段");
 
-    println!("\n=== AFTER TRAINING ===");
-    println!("Input: {}", string);
-    llm.set_training_mode(false);
+    println!("\n✅ 训练完成!");
 
-    perf_monitor.start("训练后预测 (Beam Search)");
-    let result = llm.predict_with_beam_search(&string, 3, 20);
-    perf_monitor.stop("训练后预测 (Beam Search)");
+    llm
+}
 
-    println!("Output: {}", result);
-    println!("======================\n");
+/// 继续训练已加载的模型
+fn continue_training_loaded_model(mut llm: LLM, perf_monitor: &mut PerformanceMonitor) -> LLM {
+    println!("\n🔄 继续训练模式");
 
-    perf_monitor.stop("训练总消耗时间");
+    // 加载数据
+    perf_monitor.start("加载训练数据");
+    let dataset = Dataset::new(
+        String::from("data/pretraining_data.json"),
+        String::from("data/chat_training_data.json"),
+        DatasetType::JSON,
+    );
+    perf_monitor.stop("加载训练数据");
 
-    // 打印性能报告
-    perf_monitor.print_report();
+    // 询问训练参数
+    print!("\n训练轮数 (默认50): ");
+    std::io::stdout().flush().unwrap();
+    let mut epochs_input = String::new();
+    std::io::stdin().read_line(&mut epochs_input).unwrap();
+    let epochs: usize = epochs_input.trim().parse().unwrap_or(50);
 
-    println!("\n--- Interactive Mode ---");
-    println!("Type a prompt and press Enter to generate text.");
-    println!("Type 'exit' to quit.");
+    print!("学习率 (默认0.0001): ");
+    std::io::stdout().flush().unwrap();
+    let mut lr_input = String::new();
+    std::io::stdin().read_line(&mut lr_input).unwrap();
+    let lr: f32 = lr_input.trim().parse().unwrap_or(0.0001);
+
+    println!("\n开始继续训练 ({} epochs, lr={})...\n", epochs, lr);
+
+    let chat_training_examples: Vec<&str> = dataset
+        .chat_training_data
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+
+    llm.set_training_mode(true);
+    perf_monitor.start("继续训练");
+    llm.train(chat_training_examples, epochs, lr);
+    perf_monitor.stop("继续训练");
+
+    println!("\n✅ 继续训练完成!");
+
+    llm
+}
+
+/// 交互式保存模型
+fn save_model_interactive(llm: &LLM) {
+    println!("\n选择保存格式:");
+    println!("  1) 二进制格式 (.bin) - 推荐，文件小、速度快");
+    println!("  2) JSON格式 (.json) - 人类可读，便于调试");
+    println!("  3) 两种格式都保存");
+
+    print!("\n请选择 (1/2/3): ");
+    std::io::stdout().flush().unwrap();
+
+    let mut format_choice = String::new();
+    std::io::stdin().read_line(&mut format_choice).unwrap();
+
+    std::fs::create_dir_all("checkpoints").ok();
+    std::fs::create_dir_all("exports").ok();
+
+    match format_choice.trim() {
+        "1" => {
+            print!("文件名 (默认: checkpoints/model_final.bin): ");
+            std::io::stdout().flush().unwrap();
+
+            let mut filename = String::new();
+            std::io::stdin().read_line(&mut filename).unwrap();
+            let path = if filename.trim().is_empty() {
+                "checkpoints/model_final.bin"
+            } else {
+                filename.trim()
+            };
+
+            match save_model_binary(llm, path) {
+                Ok(_) => println!("✅ 模型已保存: {}", path),
+                Err(e) => println!("❌ 保存失败: {}", e),
+            }
+        }
+        "2" => {
+            print!("文件名 (默认: exports/model_final.json): ");
+            std::io::stdout().flush().unwrap();
+
+            let mut filename = String::new();
+            std::io::stdin().read_line(&mut filename).unwrap();
+            let path = if filename.trim().is_empty() {
+                "exports/model_final.json"
+            } else {
+                filename.trim()
+            };
+
+            match save_model_json(llm, path) {
+                Ok(_) => println!("✅ 模型已保存: {}", path),
+                Err(e) => println!("❌ 保存失败: {}", e),
+            }
+        }
+        "3" => {
+            println!("\n保存二进制格式...");
+            match save_model_binary(llm, "checkpoints/model_final.bin") {
+                Ok(_) => println!("✓ 二进制格式已保存: checkpoints/model_final.bin"),
+                Err(e) => println!("✗ 二进制保存失败: {}", e),
+            }
+
+            println!("保存JSON格式...");
+            match save_model_json(llm, "exports/model_final.json") {
+                Ok(_) => println!("✓ JSON格式已保存: exports/model_final.json"),
+                Err(e) => println!("✗ JSON保存失败: {}", e),
+            }
+        }
+        _ => println!("❌ 无效选项，跳过保存"),
+    }
+}
+
+/// 交互模式
+fn interactive_mode(llm: &mut LLM) {
+    println!("\n╔═══════════════════════════════════════════════════════════╗");
+    println!("║                    交互模式                               ║");
+    println!("╚═══════════════════════════════════════════════════════════╝");
+    println!("\n💡 输入问题后按回车生成回答");
+    println!("💡 输入 'exit' 退出程序");
+    println!("💡 输入 'clear' 清空对话上下文");
+    println!("💡 输入 'save' 保存当前模型\n");
 
     let mut input = String::new();
     loop {
         input.clear();
 
-        print!("\nEnter prompt: ");
+        print!("👤 用户: ");
         std::io::stdout().flush().unwrap();
 
         std::io::stdin()
@@ -173,17 +417,33 @@ fn main() {
             .expect("Failed to read input");
 
         let trimmed_input = input.trim();
+
         if trimmed_input.eq_ignore_ascii_case("exit") {
-            println!("Exiting interactive mode.");
+            println!("👋 感谢使用，再见!");
             break;
         }
 
-        let formatted_input = format!("User: {}", trimmed_input);
+        if trimmed_input.eq_ignore_ascii_case("clear") {
+            llm.clear_context();
+            println!("✓ 对话上下文已清空\n");
+            continue;
+        }
+
+        if trimmed_input.eq_ignore_ascii_case("save") {
+            save_model_interactive(llm);
+            println!();
+            continue;
+        }
+
+        let formatted_input = format!("用户：{}", trimmed_input);
+        print!("🤖 模型: ");
+        std::io::stdout().flush().unwrap();
+
         let prediction = llm.predict_with_context(&formatted_input, 0.8, 0.9, 5);
-        println!("Model output: {}", prediction);
+        println!("{}\n", prediction);
+
         if prediction.contains("</s>") {
             llm.clear_context();
         }
-        println!("Model output: {}", prediction);
     }
 }

@@ -26,7 +26,7 @@ pub struct LLM {
     pub network: Vec<Box<dyn Layer>>,
     pub context_window: Vec<usize>,
     pub max_context_length: usize,
-    training: bool,
+    pub training: bool,
 }
 
 impl Default for LLM {
@@ -88,10 +88,12 @@ impl LLM {
         }
     }
 
+    #[allow(dead_code)]
     pub fn predict(&mut self, text: &str) -> String {
         self.predict_with_sampling(text, 1.0, 0.9, 5)
     }
 
+    #[allow(dead_code)]
     pub fn predict_with_sampling(&mut self, text: &str, temperature: f32, top_p: f32, top_k: usize) -> String {
         self.forward_with_sampling(text, temperature, top_p, top_k)
     }
@@ -122,7 +124,8 @@ impl LLM {
     pub fn predict_with_beam_search(&mut self, text: &str, beam_width: usize, max_length: usize) -> String {
         self.beam_search(text, beam_width, max_length)
     }
-    
+
+    #[allow(dead_code)]
     fn forward_with_sampling(&mut self, text: &str, temperature: f32, top_p: f32, top_k: usize) -> String {
         let mut tokenized = self.tokenize(text);
         let mut output_tokens: Vec<usize> = Vec::new();

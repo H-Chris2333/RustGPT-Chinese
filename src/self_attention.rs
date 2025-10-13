@@ -6,22 +6,21 @@ use rand_distr::{Distribution, Normal};
 use crate::{EMBEDDING_DIM, adam::Adam, llm::Layer};
 
 pub struct SelfAttention {
-    #[allow(dead_code)]
-    embedding_dim: usize,
-    num_heads: usize,
-    head_dim: usize,
-    w_q: Array2<f32>, // Weight matrices for Q, K, V
-    w_k: Array2<f32>,
-    w_v: Array2<f32>,
-    w_o: Array2<f32>, // Output projection weight
+    pub embedding_dim: usize,
+    pub num_heads: usize,
+    pub head_dim: usize,
+    pub w_q: Array2<f32>, // Weight matrices for Q, K, V
+    pub w_k: Array2<f32>,
+    pub w_v: Array2<f32>,
+    pub w_o: Array2<f32>, // Output projection weight
 
-    cached_input: Option<Array2<f32>>,
-    cached_attention_weights: Option<Array2<f32>>, // Cache for backward pass
+    pub cached_input: Option<Array2<f32>>,
+    pub cached_attention_weights: Option<Array2<f32>>, // Cache for backward pass
 
-    optimizer_w_q: Adam,
-    optimizer_w_k: Adam,
-    optimizer_w_v: Adam,
-    optimizer_w_o: Adam,
+    pub optimizer_w_q: Adam,
+    pub optimizer_w_k: Adam,
+    pub optimizer_w_v: Adam,
+    pub optimizer_w_o: Adam,
 }
 
 impl Default for SelfAttention {
@@ -221,8 +220,7 @@ impl Layer for SelfAttention {
 
     fn forward(&mut self, input: &Array2<f32>) -> Array2<f32> {
         self.cached_input = Some(input.clone());
-        let attention_output = self.multi_head_attention(input);
-        attention_output + input
+        self.multi_head_attention(input)
     }
 
     fn backward(&mut self, grads: &Array2<f32>, lr: f32) -> Array2<f32> {
@@ -252,7 +250,7 @@ impl Layer for SelfAttention {
 
         let grad_input = grad_q + grad_k + grad_v;
 
-        grad_input + grads
+        grad_input
     }
 
     fn parameters(&self) -> usize {
