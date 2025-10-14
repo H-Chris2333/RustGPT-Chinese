@@ -11,6 +11,8 @@ pub mod position_encoding;
 pub mod self_attention;
 pub mod transformer;
 pub mod vocab;
+pub mod utils;
+pub mod performance_monitor;
 
 // Re-export key structs for easier access
 pub use dataset_loader::{Dataset, DatasetType};
@@ -23,9 +25,15 @@ pub use model_serialization::{
 pub use output_projection::OutputProjection;
 pub use transformer::TransformerBlock;
 pub use vocab::Vocab;
+pub use performance_monitor::PerformanceMonitor;
 
 // Constants
 pub const MAX_SEQ_LEN: usize = 256;  // Increased to accommodate longer Chinese sentences
 pub const EMBEDDING_DIM: usize = 512;  // Increased to better represent Chinese characters
 pub const HIDDEN_DIM: usize = 1024;  // Increased to handle more complex Chinese language patterns
 pub const VOCAB_SIZE: usize = 30000;  // Target vocabulary size for Chinese characters and words
+
+// 数值稳定性常量 - 统一所有数值计算的epsilon值
+pub const EPSILON: f32 = 1e-8;        // 通用数值稳定性epsilon
+pub const LOG_EPSILON: f32 = 1e-10;   // 对数运算专用epsilon（避免log(0)）
+pub const SOFTMAX_EPSILON: f32 = 1e-12; // Softmax归一化专用epsilon

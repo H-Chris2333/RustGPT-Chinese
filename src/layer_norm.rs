@@ -1,6 +1,6 @@
 use ndarray::{Array2, Axis};
 
-use crate::{adam::Adam, llm::Layer};
+use crate::{adam::Adam, llm::Layer, EPSILON};
 
 pub struct LayerNorm {
     pub epsilon: f32,       // Small constant for stability
@@ -19,7 +19,7 @@ impl LayerNorm {
     /// Initialize LayerNorm with learnable parameters
     pub fn new(embedding_dim: usize) -> Self {
         LayerNorm {
-            epsilon: 1e-5,
+            epsilon: EPSILON, // 使用统一的EPSILON常量
             gamma: Array2::ones((1, embedding_dim)), // Initialize gamma to 1
             beta: Array2::zeros((1, embedding_dim)), // Initialize beta to 0
             cached_input: None,

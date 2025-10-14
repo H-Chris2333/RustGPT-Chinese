@@ -6,8 +6,9 @@ use rand::Rng;
 
 use crate::{
     EMBEDDING_DIM, Embeddings, HIDDEN_DIM, MAX_SEQ_LEN, Vocab, output_projection::OutputProjection,
-    transformer::TransformerBlock,
+    transformer::TransformerBlock, LOG_EPSILON, SOFTMAX_EPSILON,
 };
+use crate::utils::softmax;
 pub trait Layer {
     fn layer_type(&self) -> &str;
 
@@ -163,7 +164,7 @@ impl LLM {
                 .to_owned()
                 .insert_axis(Axis(0));
 
-            let probs = Self::softmax(&last_logit);
+            let probs = softmax(&last_logit);
 
             let adjusted_probs = Self::apply_temperature(&probs, temperature);
 
@@ -234,7 +235,7 @@ impl LLM {
                 .to_owned()
                 .insert_axis(Axis(0));
 
-            let probs = Self::softmax(&last_logit);
+            let probs = softmax(&last_logit);
 
             let tokens = Self::greedy_decode(&probs);
 
@@ -285,7 +286,7 @@ impl LLM {
                 }
 
                 let logits = input;
-                let probs = Self::softmax(&logits);
+                let probs = softmax(&logits);
 
                 total_loss += Self::cross_entropy_loss_step(&probs, target_ids);
 
@@ -333,7 +334,53 @@ impl LLM {
     pub fn clear_context(&mut self) {
         self.context_window.clear();
     }
-    
+
+    /// 启用所有transformer层的KV缓存
+    ///
+    /// KV缓存可以显著加速推理速度（10-100倍），但不能用于训练。
+    /// 适用场景：交互式对话生成、逐token生成等
+    pub fn enable_kv_cache(&mut self) {
+        for layer in &mut self.network {
+            // 只对SelfAttention层启用KV缓存
+            // TransformerBlock内部包含SelfAttention，需要特殊处理
+            // 这里我们通过layer_type判断
+            if layer.layer_type() == "TransformerBlock" {
+                // TransformerBlock需要向下传递enable命令
+                // 由于Layer trait没有enable_kv_cache方法，
+                // 我们需要在TransformerBlock中单独实现
+                // 暂时通过unsafe转换实现
+                unsafe {
+                    let ptr = layer.as_mut() as *mut dyn Layer as *mut crate::transformer::TransformerBlock;
+                    (*ptr).attention.enable_kv_cache();
+                }
+            }
+        }
+    }
+
+    /// 禁用所有transformer层的KV缓存
+    pub fn disable_kv_cache(&mut self) {
+        for layer in &mut self.network {
+            if layer.layer_type() == "TransformerBlock" {
+                unsafe {
+                    let ptr = layer.as_mut() as *mut dyn Layer as *mut crate::transformer::TransformerBlock;
+                    (*ptr).attention.disable_kv_cache();
+                }
+            }
+        }
+    }
+
+    /// 清空所有transformer层的KV缓存（保持启用状态）
+    pub fn clear_kv_cache(&mut self) {
+        for layer in &mut self.network {
+            if layer.layer_type() == "TransformerBlock" {
+                unsafe {
+                    let ptr = layer.as_mut() as *mut dyn Layer as *mut crate::transformer::TransformerBlock;
+                    (*ptr).attention.clear_kv_cache();
+                }
+            }
+        }
+    }
+
     /// Get current context as token IDs
     #[allow(dead_code)]
     pub fn get_context(&self) -> &[usize] {
@@ -407,19 +454,6 @@ impl LLM {
         tokens
     }
 
-    fn softmax(logits: &Array2<f32>) -> Array2<f32> {
-        let mut result = logits.clone();
-
-        for mut row in result.rows_mut() {
-            let max_val = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-            row.mapv_inplace(|x| (x - max_val).exp());
-            let sum_exp: f32 = row.sum();
-            row.mapv_inplace(|x| x / sum_exp.max(1e-12));
-        }
-
-        result
-    }
-
     fn apply_temperature(probs: &Array2<f32>, temperature: f32) -> Array2<f32> {
         if temperature <= 0.0 {
             return probs.clone();
@@ -431,7 +465,7 @@ impl LLM {
         for mut row in adjusted.rows_mut() {
             let mut sum = 0.0;
             for value in row.iter_mut() {
-                *value = (*value).max(1e-12).powf(power);
+                *value = (*value).max(SOFTMAX_EPSILON).powf(power);
                 sum += *value;
             }
 
@@ -598,7 +632,7 @@ impl LLM {
                 }
                 
                 let logits = input_tensor;
-                let probs = Self::softmax(&logits);
+                let probs = softmax(&logits);
                 
                 // Get the probabilities for the last token position
                 let last_token_probs = probs.row(probs.nrows() - 1);
@@ -696,7 +730,7 @@ impl LLM {
                 .to_owned()
                 .insert_axis(Axis(0));
 
-            let probs = Self::softmax(&last_logit);
+            let probs = softmax(&last_logit);
 
             let adjusted_probs = Self::apply_temperature(&probs, temperature);
 
@@ -761,10 +795,10 @@ impl LLM {
     fn cross_entropy_loss_step(probs: &Array2<f32>, target: &[usize]) -> f32 {
         let mut loss = 0.0;
         let n_targets = target.len() as f32;
-        
+
         for (row_idx, &target_idx) in target.iter().enumerate() {
             let prob_target = probs[[row_idx, target_idx]]; // Get probability of correct token
-            loss -= prob_target.max(1e-15).ln(); // Add numerical stability
+            loss -= prob_target.max(LOG_EPSILON).ln(); // 使用统一的LOG_EPSILON保证数值稳定性
         }
 
         loss / n_targets

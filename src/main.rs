@@ -1,28 +1,11 @@
-mod adam;
-mod dataset_loader;
-mod dropout;
-mod embeddings;
-mod feed_forward;
-mod layer_norm;
-mod llm;
-mod model_serialization;
-mod output_projection;
-mod position_encoding;
-mod self_attention;
-mod transformer;
-mod vocab;
-mod performance_monitor;
-
 use std::io::Write;
 
-use ::llm::{EMBEDDING_DIM, HIDDEN_DIM, MAX_SEQ_LEN};
-use dataset_loader::{Dataset, DatasetType};
-
-use crate::{
-    embeddings::Embeddings, llm::LLM, output_projection::OutputProjection,
-    transformer::TransformerBlock, vocab::Vocab,
-    performance_monitor::PerformanceMonitor,
-    model_serialization::{save_model_binary, load_model_binary, save_model_json},
+// 从lib.rs导入所有需要的类型和常量
+use llm::{
+    EMBEDDING_DIM, HIDDEN_DIM, MAX_SEQ_LEN,
+    Dataset, DatasetType, Embeddings, LLM,
+    OutputProjection, TransformerBlock, Vocab,
+    PerformanceMonitor, load_model_binary, save_model_binary, save_model_json,
 };
 
 fn main() {
@@ -419,7 +402,11 @@ fn interactive_mode(llm: &mut LLM) {
     println!("\n💡 输入问题后按回车生成回答");
     println!("💡 输入 'exit' 退出程序");
     println!("💡 输入 'clear' 清空对话上下文");
-    println!("💡 输入 'save' 保存当前模型\n");
+    println!("💡 输入 'save' 保存当前模型");
+    println!("💡 使用KV缓存加速推理（约10-100倍）\n");
+
+    // 启用KV缓存加速推理
+    llm.enable_kv_cache();
 
     let mut input = String::new();
     loop {
@@ -441,7 +428,8 @@ fn interactive_mode(llm: &mut LLM) {
 
         if trimmed_input.eq_ignore_ascii_case("clear") {
             llm.clear_context();
-            println!("✓ 对话上下文已清空\n");
+            llm.clear_kv_cache();  // 同时清空KV缓存
+            println!("✓ 对话上下文和KV缓存已清空\n");
             continue;
         }
 

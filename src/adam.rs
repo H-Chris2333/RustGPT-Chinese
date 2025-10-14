@@ -1,5 +1,7 @@
 use ndarray::Array2;
 
+use crate::EPSILON;
+
 pub struct Adam {
     pub beta1: f32,
     pub beta2: f32,
@@ -14,7 +16,7 @@ impl Adam {
         Self {
             beta1: 0.9,
             beta2: 0.999,
-            epsilon: 1e-8,
+            epsilon: EPSILON, // 使用统一的EPSILON常量
             timestep: 0,
             m: Array2::zeros(shape),
             v: Array2::zeros(shape),
