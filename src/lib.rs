@@ -85,7 +85,7 @@ pub use performance_monitor::PerformanceMonitor;
 /// **实际应用**：
 /// - 超过此长度的输入会被截断
 /// - 在对话系统中，会保留最近的256个token作为上下文
-pub const MAX_SEQ_LEN: usize = 256;
+pub const MAX_SEQ_LEN: usize = 128;
 
 /// **嵌入维度 (Embedding Dimension)**
 ///
@@ -99,7 +99,7 @@ pub const MAX_SEQ_LEN: usize = 256;
 /// **影响**：
 /// - 维度越大，模型表达能力越强，但计算成本也越高
 /// - 所有层的输入输出都必须匹配这个维度
-pub const EMBEDDING_DIM: usize = 512;
+pub const EMBEDDING_DIM: usize = 256;
 
 /// **隐藏层维度 (Hidden Dimension)**
 ///
@@ -113,7 +113,7 @@ pub const EMBEDDING_DIM: usize = 512;
 /// **作用**：
 /// - 在 FFN 中：512 → 1024 → 512（先扩展再压缩）
 /// - 这种"瓶颈结构"帮助模型提取抽象特征
-pub const HIDDEN_DIM: usize = 1024;
+pub const HIDDEN_DIM: usize = 512;
 
 /// **目标词汇表大小**
 ///

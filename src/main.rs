@@ -182,8 +182,8 @@ fn train_new_model(perf_monitor: &mut PerformanceMonitor) -> LLM {
     println!("\n🏗️  初始化神经网络...");
     let transformer_block_1 = TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM);
     let transformer_block_2 = TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM);
-    let transformer_block_3 = TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM);
-    let transformer_block_4 = TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM);
+    // 针对小数据集优化: 从4层减少到2层Transformer
+    // 这样可以大幅减少参数量,避免严重欠拟合
     let output_projection = OutputProjection::new(EMBEDDING_DIM, vocab.words.len());
     let embeddings = Embeddings::new(vocab.clone());
 
@@ -193,8 +193,6 @@ fn train_new_model(perf_monitor: &mut PerformanceMonitor) -> LLM {
             Box::new(embeddings),
             Box::new(transformer_block_1),
             Box::new(transformer_block_2),
-            Box::new(transformer_block_3),
-            Box::new(transformer_block_4),
             Box::new(output_projection),
         ],
     );
@@ -231,8 +229,8 @@ fn train_new_model(perf_monitor: &mut PerformanceMonitor) -> LLM {
     println!("║              阶段1: 预训练 (Pre-training)                 ║");
     println!("╚═══════════════════════════════════════════════════════════╝");
     println!("  • 训练样本: {}", dataset.pretraining_data.len());
-    println!("  • 训练轮数: 100 epochs");
-    println!("  • 学习率: 0.0005\n");
+    println!("  • 训练轮数: 500 epochs (针对小数据集增加轮次)");
+    println!("  • 学习率: 0.001 (提高学习率加快收敛)\n");
 
     let pretraining_examples: Vec<&str> = dataset
         .pretraining_data
@@ -241,7 +239,7 @@ fn train_new_model(perf_monitor: &mut PerformanceMonitor) -> LLM {
         .collect();
 
     perf_monitor.start("预训练阶段");
-    llm.train(pretraining_examples, 100, 0.0005);
+    llm.train(pretraining_examples, 500, 0.001);
     perf_monitor.stop("预训练阶段");
 
     // 询问是否保存预训练checkpoint
@@ -264,8 +262,8 @@ fn train_new_model(perf_monitor: &mut PerformanceMonitor) -> LLM {
     println!("║            阶段2: 指令微调 (Instruction Tuning)          ║");
     println!("╚═══════════════════════════════════════════════════════════╝");
     println!("  • 训练样本: {}", dataset.chat_training_data.len());
-    println!("  • 训练轮数: 100 epochs");
-    println!("  • 学习率: 0.0001\n");
+    println!("  • 训练轮数: 500 epochs (针对小数据集增加轮次)");
+    println!("  • 学习率: 0.0005 (保持较高学习率以充分拟合)\n");
 
     let chat_training_examples: Vec<&str> = dataset
         .chat_training_data
@@ -274,7 +272,7 @@ fn train_new_model(perf_monitor: &mut PerformanceMonitor) -> LLM {
         .collect();
 
     perf_monitor.start("指令微调阶段");
-    llm.train(chat_training_examples, 100, 0.0001);
+    llm.train(chat_training_examples, 500, 0.0005);
     perf_monitor.stop("指令微调阶段");
 
     println!("\n✅ 训练完成!");
