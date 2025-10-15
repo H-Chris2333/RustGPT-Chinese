@@ -65,7 +65,7 @@
 
 use ndarray::{Array2, Axis};
 
-use crate::{adam::Adam, llm::Layer, EPSILON};
+use crate::{EPSILON, adam::Adam, llm::Layer};
 
 /// **层归一化结构体**
 pub struct LayerNorm {
@@ -81,7 +81,6 @@ pub struct LayerNorm {
     pub beta: Array2<f32>,
 
     // ========== 前向传播缓存（用于反向传播） ==========
-
     /// **缓存输入**: 原始输入值
     pub cached_input: Option<Array2<f32>>,
 
@@ -92,7 +91,6 @@ pub struct LayerNorm {
     pub cached_std: Option<Array2<f32>>,
 
     // ========== Adam 优化器 ==========
-
     pub optimizer_gamma: Adam,
     pub optimizer_beta: Adam,
 }
@@ -111,9 +109,9 @@ impl LayerNorm {
     /// 这样初始化确保层归一化在训练初期不改变数据分布。
     pub fn new(embedding_dim: usize) -> Self {
         LayerNorm {
-            epsilon: EPSILON, // 使用统一的 EPSILON 常量
-            gamma: Array2::ones((1, embedding_dim)),  // γ 初始化为 1
-            beta: Array2::zeros((1, embedding_dim)),  // β 初始化为 0
+            epsilon: EPSILON,                        // 使用统一的 EPSILON 常量
+            gamma: Array2::ones((1, embedding_dim)), // γ 初始化为 1
+            beta: Array2::zeros((1, embedding_dim)), // β 初始化为 0
             cached_input: None,
             cached_mean: None,
             cached_std: None,
@@ -160,7 +158,7 @@ impl LayerNorm {
     pub fn normalize(&mut self, input: &Array2<f32>) -> Array2<f32> {
         // 步骤 1: 计算每个样本的均值和标准差
         let mean = input.mean_axis(Axis(1)).unwrap().insert_axis(Axis(1)); // (seq_len, 1)
-        let std = input.std_axis(Axis(1), 0.0).insert_axis(Axis(1));       // (seq_len, 1)
+        let std = input.std_axis(Axis(1), 0.0).insert_axis(Axis(1)); // (seq_len, 1)
 
         // 缓存值用于反向传播
         self.cached_input = Some(input.clone());

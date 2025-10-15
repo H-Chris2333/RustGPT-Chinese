@@ -37,21 +37,21 @@
 // 模块声明
 // ============================================================================
 
-pub mod adam;                    // Adam 优化器：带动量的自适应学习率优化算法
-pub mod dataset_loader;          // 数据加载器：处理预训练和对话数据
-pub mod dropout;                 // Dropout层：随机丢弃神经元，防止过拟合
-pub mod embeddings;              // 嵌入层：将token ID转换为稠密向量表示
-pub mod feed_forward;            // 前馈网络：Transformer中的全连接层部分
-pub mod layer_norm;              // 层归一化：稳定训练的归一化技术
-pub mod llm;                     // 语言模型主类：整合所有组件的核心模型
-pub mod model_serialization;     // 模型序列化：保存和加载模型权重
-pub mod output_projection;       // 输出投影层：将隐藏状态映射到词汇表概率
-pub mod position_encoding;       // 位置编码：为序列注入位置信息
-pub mod self_attention;          // 自注意力机制：Transformer的核心组件
-pub mod transformer;             // Transformer块：注意力+前馈的完整模块
-pub mod vocab;                   // 词汇表：管理token和ID的映射关系
-pub mod utils;                   // 工具函数：通用辅助函数
-pub mod performance_monitor;     // 性能监控：记录和分析训练/推理性能
+pub mod adam; // Adam 优化器：带动量的自适应学习率优化算法
+pub mod dataset_loader; // 数据加载器：处理预训练和对话数据
+pub mod dropout; // Dropout层：随机丢弃神经元，防止过拟合
+pub mod embeddings; // 嵌入层：将token ID转换为稠密向量表示
+pub mod feed_forward; // 前馈网络：Transformer中的全连接层部分
+pub mod layer_norm; // 层归一化：稳定训练的归一化技术
+pub mod llm; // 语言模型主类：整合所有组件的核心模型
+pub mod model_serialization; // 模型序列化：保存和加载模型权重
+pub mod output_projection; // 输出投影层：将隐藏状态映射到词汇表概率
+pub mod performance_monitor;
+pub mod position_encoding; // 位置编码：为序列注入位置信息
+pub mod self_attention; // 自注意力机制：Transformer的核心组件
+pub mod transformer; // Transformer块：注意力+前馈的完整模块
+pub mod utils; // 工具函数：通用辅助函数
+pub mod vocab; // 词汇表：管理token和ID的映射关系 // 性能监控：记录和分析训练/推理性能
 
 // ============================================================================
 // 重导出核心类型（简化外部使用）
@@ -61,13 +61,12 @@ pub use dataset_loader::{Dataset, DatasetType};
 pub use embeddings::Embeddings;
 pub use llm::{LLM, Layer};
 pub use model_serialization::{
-    load_model_auto, load_model_binary, load_model_json,
-    save_model_binary, save_model_json,
+    load_model_auto, load_model_binary, load_model_json, save_model_binary, save_model_json,
 };
 pub use output_projection::OutputProjection;
+pub use performance_monitor::PerformanceMonitor;
 pub use transformer::TransformerBlock;
 pub use vocab::Vocab;
-pub use performance_monitor::PerformanceMonitor;
 
 // ============================================================================
 // 模型超参数（Model Hyperparameters）

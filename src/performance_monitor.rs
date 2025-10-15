@@ -1,5 +1,5 @@
-use std::time::{Duration, Instant};
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 /// 性能监控工具：追踪各个操作的执行时间
 pub struct PerformanceMonitor {
@@ -31,7 +31,8 @@ impl PerformanceMonitor {
     pub fn stop(&mut self, name: &str) {
         if let Some(start_time) = self.current_timers.remove(name) {
             let elapsed = start_time.elapsed();
-            self.timers.entry(name.to_string())
+            self.timers
+                .entry(name.to_string())
                 .or_insert_with(Vec::new)
                 .push(elapsed);
 
@@ -51,9 +52,9 @@ impl PerformanceMonitor {
     /// 获取某个操作的总耗时
     #[allow(dead_code)]
     pub fn get_total(&self, name: &str) -> Option<Duration> {
-        self.timers.get(name).map(|durations| {
-            durations.iter().sum()
-        })
+        self.timers
+            .get(name)
+            .map(|durations| durations.iter().sum())
     }
 
     /// 打印性能报告
@@ -72,8 +73,14 @@ impl PerformanceMonitor {
 
             println!("║ {:40} ║", name);
             println!("║   调用次数: {:6}                               ║", count);
-            println!("║   总耗时:   {:8.2}秒                          ║", total.as_secs_f32());
-            println!("║   平均耗时: {:8.2}秒                          ║", average.as_secs_f32());
+            println!(
+                "║   总耗时:   {:8.2}秒                          ║",
+                total.as_secs_f32()
+            );
+            println!(
+                "║   平均耗时: {:8.2}秒                          ║",
+                average.as_secs_f32()
+            );
             println!("╠──────────────────────────────────────────────────────────╣");
         }
 

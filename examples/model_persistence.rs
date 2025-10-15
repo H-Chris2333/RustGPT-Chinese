@@ -5,8 +5,8 @@
 // 2. 加载并使用: cargo run --bin load_model
 
 use llm::{
-    Dataset, DatasetType, Embeddings, LLM, OutputProjection, TransformerBlock, Vocab,
-    EMBEDDING_DIM, HIDDEN_DIM, save_model_binary, load_model_binary,
+    Dataset, DatasetType, EMBEDDING_DIM, Embeddings, HIDDEN_DIM, LLM, OutputProjection,
+    TransformerBlock, Vocab, load_model_binary, save_model_binary,
 };
 use std::collections::HashSet;
 
@@ -29,7 +29,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn print_usage() {
-    println!("
+    println!(
+        "
 ╔═══════════════════════════════════════════════════════════╗
 ║         RustGPT-Chinese 模型保存/加载工具                 ║
 ╚═══════════════════════════════════════════════════════════╝
@@ -48,7 +49,8 @@ fn print_usage() {
 
   # 从checkpoint继续训练50个epoch
   cargo run --bin model_persistence continue
-");
+"
+    );
 }
 
 /// 训练模型并保存

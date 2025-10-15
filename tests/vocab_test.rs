@@ -24,7 +24,7 @@ fn test_vocab_default() {
     assert!(vocab.encode("hello").is_some());
     assert!(vocab.encode("world").is_some());
     assert!(vocab.encode("</s>").is_some()); // This is a special token at index 3
-    
+
     // Verify special token IDs
     assert_eq!(vocab.eos_token_id(), 3); // </s> is at index 3
     assert_eq!(vocab.pad_token_id(), 0); // <|pad|> is at index 0
@@ -34,7 +34,7 @@ fn test_vocab_default() {
 #[test]
 fn test_vocab_basic_operations() {
     let vocab = Vocab::new(vec!["hello", "world", "test"]);
-    
+
     // With special tokens, "hello" should be at index 7 (0-6 are special tokens)
     assert_eq!(vocab.encode("hello"), Some(7));
     assert_eq!(vocab.decode(7), Some(&"hello".to_string()));
@@ -52,11 +52,11 @@ fn test_vocab_special_tokens() {
 #[test]
 fn test_encode_decode_sequence() {
     let vocab = Vocab::new(vec!["hello", "world", "rust"]);
-    
+
     let text = "hello world";
     let encoded = vocab.encode_sequence(text);
     let decoded = vocab.decode_sequence(&encoded);
-    
+
     assert!(!encoded.is_empty());
     assert!(decoded.contains("hello"));
     assert!(decoded.contains("world"));
@@ -66,10 +66,8 @@ fn test_encode_decode_sequence() {
 fn test_build_from_texts() {
     let texts = vec!["hello world".to_string(), "world of rust".to_string()];
     let vocab = Vocab::build_from_texts(&texts);
-    
+
     assert!(vocab.encode("hello").is_some());
     assert!(vocab.encode("world").is_some());
     assert!(vocab.encode("rust").is_some());
 }
-
-

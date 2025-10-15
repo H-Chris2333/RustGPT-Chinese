@@ -56,7 +56,6 @@ pub struct FeedForward {
     pub b2: Array2<f32>,
 
     // ========== 缓存变量（用于反向传播） ==========
-
     /// **缓存的输入** x: (seq_len, 512)
     pub input: Option<Array2<f32>>,
 
@@ -69,7 +68,6 @@ pub struct FeedForward {
     pub hidden_post_activation: Option<Array2<f32>>,
 
     // ========== Adam 优化器（每个参数一个） ==========
-
     /// W₁ 的优化器
     pub optimizer_w1: Adam,
 

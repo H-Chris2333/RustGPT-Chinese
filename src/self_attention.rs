@@ -73,8 +73,8 @@ use std::f32;
 use ndarray::{Array2, Axis, s};
 use rand_distr::{Distribution, Normal};
 
-use crate::{EMBEDDING_DIM, adam::Adam, llm::Layer};
 use crate::utils::softmax;
+use crate::{EMBEDDING_DIM, adam::Adam, llm::Layer};
 
 /// **多头自注意力机制结构体**
 pub struct SelfAttention {
@@ -88,7 +88,6 @@ pub struct SelfAttention {
     pub head_dim: usize,
 
     // ========== 核心权重矩阵 ==========
-
     /// **Query 投影矩阵** W_Q: (512, 512)
     /// 将输入转换为查询向量："我在寻找什么信息？"
     pub w_q: Array2<f32>,
@@ -106,7 +105,6 @@ pub struct SelfAttention {
     pub w_o: Array2<f32>,
 
     // ========== 前向传播缓存（用于反向传播） ==========
-
     /// **缓存输入**: (seq_len, 512) - 原始输入，用于计算梯度
     pub cached_input: Option<Array2<f32>>,
 
@@ -129,7 +127,6 @@ pub struct SelfAttention {
     pub cached_attention_output: Option<Array2<f32>>,
 
     // ========== KV缓存优化（推理加速） ==========
-
     /// **KV缓存**: (K_cache, V_cache)
     ///
     /// 存储历史 token 的 K 和 V 矩阵，避免重复计算。
@@ -146,7 +143,6 @@ pub struct SelfAttention {
     pub use_kv_cache: bool,
 
     // ========== Adam 优化器（每个权重矩阵一个） ==========
-
     pub optimizer_w_q: Adam,
     pub optimizer_w_k: Adam,
     pub optimizer_w_v: Adam,
@@ -213,8 +209,8 @@ impl SelfAttention {
             cached_attention_scores: None,
             cached_attention_weights: None,
             cached_attention_output: None,
-            kv_cache: None,         // 默认不使用 KV 缓存
-            use_kv_cache: false,    // 默认训练模式
+            kv_cache: None,      // 默认不使用 KV 缓存
+            use_kv_cache: false, // 默认训练模式
             optimizer_w_q: Adam::new((embedding_dim, embedding_dim)),
             optimizer_w_k: Adam::new((embedding_dim, embedding_dim)),
             optimizer_w_v: Adam::new((embedding_dim, embedding_dim)),
@@ -272,12 +268,16 @@ impl SelfAttention {
     /// # 返回值
     /// - `output`: 注意力输出 (seq_len, head_dim)
     /// - `weights`: 注意力权重 (seq_len, seq_len)，用于反向传播
-    fn attention(&self, q: &Array2<f32>, k: &Array2<f32>, v: &Array2<f32>)
-        -> (Array2<f32>, Array2<f32>) {
+    fn attention(
+        &self,
+        q: &Array2<f32>,
+        k: &Array2<f32>,
+        v: &Array2<f32>,
+    ) -> (Array2<f32>, Array2<f32>) {
         // 步骤 1: 计算缩放点积注意力分数
-        let dk = (q.ncols() as f32).sqrt();  // √d_k = √64 = 8
+        let dk = (q.ncols() as f32).sqrt(); // √d_k = √64 = 8
         let k_t = k.t();
-        let mut scores = q.dot(&k_t) / dk;   // (seq_len, seq_len)
+        let mut scores = q.dot(&k_t) / dk; // (seq_len, seq_len)
 
         // 步骤 2: 应用因果掩码（Causal Mask）
         // 将未来位置设为 -∞，确保模型只能看到过去和当前的信息
@@ -286,7 +286,7 @@ impl SelfAttention {
             if i + 1 < seq_len {
                 // 使用切片操作一次性设置整行的后续位置为负无穷
                 // 例如：位置0只能看自己，位置1可以看0和1，位置2可以看0、1、2
-                scores.slice_mut(s![i, i+1..]).fill(f32::NEG_INFINITY);
+                scores.slice_mut(s![i, i + 1..]).fill(f32::NEG_INFINITY);
             }
         }
 
@@ -348,7 +348,8 @@ impl SelfAttention {
                 let result_row_idx = seq_idx * self.num_heads + head_idx;
 
                 // 使用切片赋值，比逐元素复制更高效
-                result.row_mut(result_row_idx)
+                result
+                    .row_mut(result_row_idx)
                     .assign(&row.slice(s![start_dim..end_dim]));
             }
         }
@@ -391,7 +392,8 @@ impl SelfAttention {
                 let dst_end = dst_start + self.head_dim;
 
                 // 使用切片赋值
-                result.slice_mut(s![seq_idx, dst_start..dst_end])
+                result
+                    .slice_mut(s![seq_idx, dst_start..dst_end])
                     .assign(&x.row(src_row_idx));
             }
         }
@@ -431,9 +433,15 @@ impl SelfAttention {
         let mut result = Array2::zeros((seq_len * self.num_heads, self.head_dim));
 
         for head in 0..self.num_heads {
-            let q_head = q_heads.slice(s![head..seq_len * self.num_heads; self.num_heads, ..]).to_owned();
-            let k_head = k_heads.slice(s![head..seq_len * self.num_heads; self.num_heads, ..]).to_owned();
-            let v_head = v_heads.slice(s![head..seq_len * self.num_heads; self.num_heads, ..]).to_owned();
+            let q_head = q_heads
+                .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
+                .to_owned();
+            let k_head = k_heads
+                .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
+                .to_owned();
+            let v_head = v_heads
+                .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
+                .to_owned();
 
             let (head_output, _head_weights) = self.attention(&q_head, &k_head, &v_head);
 
@@ -520,7 +528,9 @@ impl SelfAttention {
         let mut result = Array2::zeros((seq_len * self.num_heads, self.head_dim));
 
         for head in 0..self.num_heads {
-            let q_head = q_heads.slice(s![head..seq_len * self.num_heads; self.num_heads, ..]).to_owned();
+            let q_head = q_heads
+                .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
+                .to_owned();
             let k_head = k_heads.slice(s![head..; self.num_heads, ..]).to_owned();
             let v_head = v_heads.slice(s![head..; self.num_heads, ..]).to_owned();
 

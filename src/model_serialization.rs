@@ -33,7 +33,7 @@ use crate::{
     embeddings::Embeddings,
     feed_forward::FeedForward,
     layer_norm::LayerNorm,
-    llm::{Layer, LLM},
+    llm::{LLM, Layer},
     output_projection::OutputProjection,
     position_encoding::PositionEncoding,
     self_attention::SelfAttention,
@@ -184,22 +184,25 @@ impl SerializableLayer {
     pub fn from_layer(layer: &Box<dyn Layer>) -> Result<Self, String> {
         match layer.layer_type() {
             "Embeddings" => {
-                let embeddings = unsafe {
-                    &*(layer.as_ref() as *const dyn Layer as *const Embeddings)
-                };
-                Ok(SerializableLayer::Embeddings(Self::serialize_embeddings(embeddings)))
+                let embeddings =
+                    unsafe { &*(layer.as_ref() as *const dyn Layer as *const Embeddings) };
+                Ok(SerializableLayer::Embeddings(Self::serialize_embeddings(
+                    embeddings,
+                )))
             }
             "TransformerBlock" => {
-                let transformer = unsafe {
-                    &*(layer.as_ref() as *const dyn Layer as *const TransformerBlock)
-                };
-                Ok(SerializableLayer::TransformerBlock(Self::serialize_transformer_block(transformer)))
+                let transformer =
+                    unsafe { &*(layer.as_ref() as *const dyn Layer as *const TransformerBlock) };
+                Ok(SerializableLayer::TransformerBlock(
+                    Self::serialize_transformer_block(transformer),
+                ))
             }
             "OutputProjection" => {
-                let output_proj = unsafe {
-                    &*(layer.as_ref() as *const dyn Layer as *const OutputProjection)
-                };
-                Ok(SerializableLayer::OutputProjection(Self::serialize_output_projection(output_proj)))
+                let output_proj =
+                    unsafe { &*(layer.as_ref() as *const dyn Layer as *const OutputProjection) };
+                Ok(SerializableLayer::OutputProjection(
+                    Self::serialize_output_projection(output_proj),
+                ))
             }
             other => Err(format!("Unsupported layer type: {}", other)),
         }
@@ -207,9 +210,7 @@ impl SerializableLayer {
 
     pub fn to_layer(&self, vocab_size: usize) -> Box<dyn Layer> {
         match self {
-            SerializableLayer::Embeddings(s) => {
-                Box::new(Self::deserialize_embeddings(s))
-            }
+            SerializableLayer::Embeddings(s) => Box::new(Self::deserialize_embeddings(s)),
             SerializableLayer::TransformerBlock(s) => {
                 Box::new(Self::deserialize_transformer_block(s))
             }
@@ -228,11 +229,9 @@ impl SerializableLayer {
     }
 
     fn deserialize_embeddings(s: &SerializableEmbeddings) -> Embeddings {
-        let token_embeddings = Array2::from_shape_vec(
-            s.token_embeddings_shape,
-            s.token_embeddings_data.clone(),
-        )
-        .expect("Failed to reconstruct token_embeddings");
+        let token_embeddings =
+            Array2::from_shape_vec(s.token_embeddings_shape, s.token_embeddings_data.clone())
+                .expect("Failed to reconstruct token_embeddings");
 
         Embeddings {
             token_embeddings,
@@ -291,8 +290,8 @@ impl SerializableLayer {
             cached_attention_scores: None,
             cached_attention_weights: None,
             cached_attention_output: None,
-            kv_cache: None,            // KV缓存初始化为None
-            use_kv_cache: false,       // 默认不使用KV缓存
+            kv_cache: None,      // KV缓存初始化为None
+            use_kv_cache: false, // 默认不使用KV缓存
             optimizer_w_q: s.optimizer_w_q.to_adam(),
             optimizer_w_k: s.optimizer_w_k.to_adam(),
             optimizer_w_v: s.optimizer_w_v.to_adam(),
@@ -400,7 +399,10 @@ impl SerializableLayer {
         }
     }
 
-    fn deserialize_output_projection(s: &SerializableOutputProjection, _vocab_size: usize) -> OutputProjection {
+    fn deserialize_output_projection(
+        s: &SerializableOutputProjection,
+        _vocab_size: usize,
+    ) -> OutputProjection {
         let w_out = Array2::from_shape_vec(s.w_out_shape, s.w_out_data.clone())
             .expect("Failed to reconstruct w_out");
         let b_out = Array2::from_shape_vec(s.b_out_shape, s.b_out_data.clone())
@@ -529,9 +531,7 @@ pub fn save_model_binary<P: AsRef<Path>>(
 }
 
 /// 从二进制文件加载模型
-pub fn load_model_binary<P: AsRef<Path>>(
-    path: P,
-) -> Result<LLM, Box<dyn std::error::Error>> {
+pub fn load_model_binary<P: AsRef<Path>>(path: P) -> Result<LLM, Box<dyn std::error::Error>> {
     println!("📂 开始从二进制文件加载模型...");
     println!("   路径: {:?}", path.as_ref());
 
@@ -539,8 +539,7 @@ pub fn load_model_binary<P: AsRef<Path>>(
     let mut reader = BufReader::new(file);
 
     let config = bincode::config::standard();
-    let serializable_model: SerializableModel =
-        bincode::decode_from_std_read(&mut reader, config)?;
+    let serializable_model: SerializableModel = bincode::decode_from_std_read(&mut reader, config)?;
 
     println!("   ✓ 文件读取成功");
     println!("   模型版本: {}", serializable_model.version);
@@ -622,9 +621,7 @@ pub fn save_model_json<P: AsRef<Path>>(
 
 /// 从 JSON 文件加载模型
 #[allow(dead_code)]
-pub fn load_model_json<P: AsRef<Path>>(
-    path: P,
-) -> Result<LLM, Box<dyn std::error::Error>> {
+pub fn load_model_json<P: AsRef<Path>>(path: P) -> Result<LLM, Box<dyn std::error::Error>> {
     println!("📂 开始从 JSON 文件加载模型...");
     println!("   路径: {:?}", path.as_ref());
 

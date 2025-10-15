@@ -1,6 +1,6 @@
 use llm::{
-    EMBEDDING_DIM, Embeddings, HIDDEN_DIM, LLM, Layer, Vocab,
-    output_projection::OutputProjection, transformer::TransformerBlock,
+    EMBEDDING_DIM, Embeddings, HIDDEN_DIM, LLM, Layer, Vocab, output_projection::OutputProjection,
+    transformer::TransformerBlock,
 };
 use ndarray::Array2;
 
@@ -148,9 +148,24 @@ fn test_llm_total_parameters() {
     assert!(param_count > 0);
 
     // Verify that the parameter count matches the sum of individual layer parameters
-    let embeddings_param_count = LLM::new(vocab.clone(), vec![Box::new(Embeddings::new(vocab.clone()))]).total_parameters();
-    let transformer_param_count = LLM::new(vocab.clone(), vec![Box::new(TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM))]).total_parameters();
-    let output_param_count = LLM::new(vocab.clone(), vec![Box::new(OutputProjection::new(EMBEDDING_DIM, vocab_size))]).total_parameters();
+    let embeddings_param_count = LLM::new(
+        vocab.clone(),
+        vec![Box::new(Embeddings::new(vocab.clone()))],
+    )
+    .total_parameters();
+    let transformer_param_count = LLM::new(
+        vocab.clone(),
+        vec![Box::new(TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM))],
+    )
+    .total_parameters();
+    let output_param_count = LLM::new(
+        vocab.clone(),
+        vec![Box::new(OutputProjection::new(EMBEDDING_DIM, vocab_size))],
+    )
+    .total_parameters();
 
-    assert_eq!(param_count, embeddings_param_count + transformer_param_count + output_param_count);
+    assert_eq!(
+        param_count,
+        embeddings_param_count + transformer_param_count + output_param_count
+    );
 }

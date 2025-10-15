@@ -1,14 +1,14 @@
 use std::cmp::Ordering;
 
 use ndarray::{Array1, Array2, Axis};
-use rand::rng;
 use rand::Rng;
+use rand::rng;
 
-use crate::{
-    EMBEDDING_DIM, Embeddings, HIDDEN_DIM, MAX_SEQ_LEN, Vocab, output_projection::OutputProjection,
-    transformer::TransformerBlock, LOG_EPSILON, SOFTMAX_EPSILON,
-};
 use crate::utils::softmax;
+use crate::{
+    EMBEDDING_DIM, Embeddings, HIDDEN_DIM, LOG_EPSILON, MAX_SEQ_LEN, SOFTMAX_EPSILON, Vocab,
+    output_projection::OutputProjection, transformer::TransformerBlock,
+};
 pub trait Layer {
     fn layer_type(&self) -> &str;
 
@@ -95,24 +95,36 @@ impl LLM {
     }
 
     #[allow(dead_code)]
-    pub fn predict_with_sampling(&mut self, text: &str, temperature: f32, top_p: f32, top_k: usize) -> String {
+    pub fn predict_with_sampling(
+        &mut self,
+        text: &str,
+        temperature: f32,
+        top_p: f32,
+        top_k: usize,
+    ) -> String {
         self.forward_with_sampling(text, temperature, top_p, top_k)
     }
 
-    pub fn predict_with_context(&mut self, text: &str, temperature: f32, top_p: f32, top_k: usize) -> String {
+    pub fn predict_with_context(
+        &mut self,
+        text: &str,
+        temperature: f32,
+        top_p: f32,
+        top_k: usize,
+    ) -> String {
         // Tokenize the new input
         let new_tokens = self.tokenize(text);
-        
+
         // Combine context with new input
         let mut all_tokens = self.context_window.clone();
         all_tokens.extend_from_slice(&new_tokens);
-        
+
         // Ensure we don't exceed the maximum sequence length
         if all_tokens.len() > MAX_SEQ_LEN {
             let start_idx = all_tokens.len() - MAX_SEQ_LEN;
             all_tokens = all_tokens[start_idx..].to_vec();
         }
-        
+
         let result = self.generate_with_context(&all_tokens, temperature, top_p, top_k);
 
         self.add_to_context(&new_tokens);
@@ -122,12 +134,23 @@ impl LLM {
         result
     }
 
-    pub fn predict_with_beam_search(&mut self, text: &str, beam_width: usize, max_length: usize) -> String {
+    pub fn predict_with_beam_search(
+        &mut self,
+        text: &str,
+        beam_width: usize,
+        max_length: usize,
+    ) -> String {
         self.beam_search(text, beam_width, max_length)
     }
 
     #[allow(dead_code)]
-    fn forward_with_sampling(&mut self, text: &str, temperature: f32, top_p: f32, top_k: usize) -> String {
+    fn forward_with_sampling(
+        &mut self,
+        text: &str,
+        temperature: f32,
+        top_p: f32,
+        top_k: usize,
+    ) -> String {
         let mut tokenized = self.tokenize(text);
         let mut output_tokens: Vec<usize> = Vec::new();
 
@@ -322,14 +345,14 @@ impl LLM {
     pub fn add_to_context(&mut self, tokens: &[usize]) {
         // Add new tokens to the context window
         self.context_window.extend_from_slice(tokens);
-        
+
         // If context exceeds maximum length, remove oldest tokens
         if self.context_window.len() > self.max_context_length {
             let excess = self.context_window.len() - self.max_context_length;
             self.context_window.drain(0..excess);
         }
     }
-    
+
     /// Clear the context window
     pub fn clear_context(&mut self) {
         self.context_window.clear();
@@ -350,7 +373,8 @@ impl LLM {
                 // 我们需要在TransformerBlock中单独实现
                 // 暂时通过unsafe转换实现
                 unsafe {
-                    let ptr = layer.as_mut() as *mut dyn Layer as *mut crate::transformer::TransformerBlock;
+                    let ptr = layer.as_mut() as *mut dyn Layer
+                        as *mut crate::transformer::TransformerBlock;
                     (*ptr).attention.enable_kv_cache();
                 }
             }
@@ -362,7 +386,8 @@ impl LLM {
         for layer in &mut self.network {
             if layer.layer_type() == "TransformerBlock" {
                 unsafe {
-                    let ptr = layer.as_mut() as *mut dyn Layer as *mut crate::transformer::TransformerBlock;
+                    let ptr = layer.as_mut() as *mut dyn Layer
+                        as *mut crate::transformer::TransformerBlock;
                     (*ptr).attention.disable_kv_cache();
                 }
             }
@@ -374,7 +399,8 @@ impl LLM {
         for layer in &mut self.network {
             if layer.layer_type() == "TransformerBlock" {
                 unsafe {
-                    let ptr = layer.as_mut() as *mut dyn Layer as *mut crate::transformer::TransformerBlock;
+                    let ptr = layer.as_mut() as *mut dyn Layer
+                        as *mut crate::transformer::TransformerBlock;
                     (*ptr).attention.clear_kv_cache();
                 }
             }
@@ -386,7 +412,7 @@ impl LLM {
     pub fn get_context(&self) -> &[usize] {
         &self.context_window
     }
-    
+
     /// Set a fixed context
     #[allow(dead_code)]
     pub fn set_context(&mut self, tokens: Vec<usize>) {
@@ -397,13 +423,15 @@ impl LLM {
             self.context_window.drain(0..excess);
         }
     }
-    
+
     pub fn tokenize(&self, text: &str) -> Vec<usize> {
         // 使用 vocab 模块中的全局 Jieba 实例
         // 不再每次调用都初始化 Jieba
 
         // Check if the text contains Chinese characters
-        let has_chinese = text.chars().any(|c| (c as u32) >= 0x4E00 && (c as u32) <= 0x9FFF);
+        let has_chinese = text
+            .chars()
+            .any(|c| (c as u32) >= 0x4E00 && (c as u32) <= 0x9FFF);
 
         let mut tokens = Vec::new();
 
@@ -490,11 +518,11 @@ impl LLM {
             })
             .to_vec()
     }
-    
+
     /// Top-k sampling: only consider the k most probable tokens
     fn top_k_sampling(&self, probs: &Array2<f32>, k: usize) -> Vec<usize> {
         let mut result = Vec::new();
-        
+
         for row in probs.rows() {
             // Create a vector of (probability, index) pairs
             let mut prob_idx_pairs: Vec<(f32, usize)> = row
@@ -502,38 +530,38 @@ impl LLM {
                 .enumerate()
                 .map(|(idx, &prob)| (prob, idx))
                 .collect();
-            
+
             // Sort by probability in descending order and take top k
             prob_idx_pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
             let top_k_pairs = &prob_idx_pairs[..k.min(prob_idx_pairs.len())];
-            
+
             // Create a new probability distribution from top-k tokens
             let mut top_k_probs = vec![0.0; self.vocab.words.len()];
             let mut sum = 0.0;
-            
+
             for &(prob, idx) in top_k_pairs {
                 top_k_probs[idx] = prob;
                 sum += prob;
             }
-            
+
             // Normalize the probabilities
             if sum > 0.0 {
                 for p in &mut top_k_probs {
                     *p /= sum;
                 }
             }
-            
+
             // Sample from the top-k distribution
             result.push(self.sample_from_probs(&top_k_probs));
         }
-        
+
         result
     }
-    
+
     /// Top-p (nucleus) sampling: consider the smallest set of tokens whose cumulative probability exceeds p
     fn top_p_sampling(&self, probs: &Array2<f32>, p: f32) -> Vec<usize> {
         let mut result = Vec::new();
-        
+
         for row in probs.rows() {
             // Create a vector of (probability, index) pairs and sort by probability in descending order
             let mut prob_idx_pairs: Vec<(f32, usize)> = row
@@ -541,45 +569,45 @@ impl LLM {
                 .enumerate()
                 .map(|(idx, &prob)| (prob, idx))
                 .collect();
-            
+
             prob_idx_pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
-            
+
             // Find the smallest set of tokens whose cumulative probability exceeds p
             let mut cumulative_prob = 0.0;
             let mut selected_pairs = Vec::new();
-            
+
             for &(prob, idx) in &prob_idx_pairs {
                 cumulative_prob += prob;
                 selected_pairs.push((prob, idx));
-                
+
                 if cumulative_prob >= p {
                     break;
                 }
             }
-            
+
             // Create a new probability distribution from selected tokens
             let mut selected_probs = vec![0.0; self.vocab.words.len()];
             let mut sum = 0.0;
-            
+
             for &(prob, idx) in &selected_pairs {
                 selected_probs[idx] = prob;
                 sum += prob;
             }
-            
+
             // Normalize the probabilities
             if sum > 0.0 {
                 for p in &mut selected_probs {
                     *p /= sum;
                 }
             }
-            
+
             // Sample from the selected distribution
             result.push(self.sample_from_probs(&selected_probs));
         }
-        
+
         result
     }
-    
+
     /// Sample from a probability distribution
     fn sample_from_probs(&self, probs: &[f32]) -> usize {
         let mut rng = rng();
@@ -606,7 +634,7 @@ impl LLM {
 
         probs.len() - 1
     }
-    
+
     /// Beam search implementation
     fn beam_search(&mut self, text: &str, beam_width: usize, max_length: usize) -> String {
         // Tokenize the input text
@@ -614,53 +642,55 @@ impl LLM {
         if initial_tokens.is_empty() {
             return String::new();
         }
-        
+
         // Initialize beam with the initial sequence
         let mut current_beams = vec![(initial_tokens.clone(), 0.0f32)]; // (sequence, log_probability)
-        
+
         for _ in initial_tokens.len()..max_length {
             let mut candidates = Vec::new();
-            
+
             for (seq, log_prob) in &current_beams {
                 // Get model prediction for the current sequence
-                let input = Array2::from_shape_vec((1, seq.len()), seq.iter().map(|&x| x as f32).collect())
-                    .unwrap();
-                
+                let input =
+                    Array2::from_shape_vec((1, seq.len()), seq.iter().map(|&x| x as f32).collect())
+                        .unwrap();
+
                 let mut input_tensor = input;
                 for layer in &mut self.network {
                     input_tensor = layer.forward(&input_tensor);
                 }
-                
+
                 let logits = input_tensor;
                 let probs = softmax(&logits);
-                
+
                 // Get the probabilities for the last token position
                 let last_token_probs = probs.row(probs.nrows() - 1);
-                
+
                 // Get top-k candidates for this sequence
                 let mut token_probs: Vec<(f32, usize)> = last_token_probs
                     .iter()
                     .enumerate()
                     .map(|(idx, &prob)| (prob, idx))
                     .collect();
-                
+
                 token_probs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
-                
+
                 // Add candidates with updated sequences and log probabilities
                 for &(prob, token_id) in token_probs.iter().take(beam_width) {
-                    if prob > 0.0 {  // Only consider non-zero probability tokens
+                    if prob > 0.0 {
+                        // Only consider non-zero probability tokens
                         let mut new_seq = seq.clone();
                         new_seq.push(token_id);
-                        let new_log_prob = log_prob + prob.ln();  // Add log probabilities
+                        let new_log_prob = log_prob + prob.ln(); // Add log probabilities
                         candidates.push((new_seq, new_log_prob));
                     }
                 }
             }
-            
+
             // Sort candidates by log probability and keep the top beam_width
             candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
             current_beams = candidates.into_iter().take(beam_width).collect();
-            
+
             // Check if any beam has generated an end token
             if current_beams.iter().any(|(seq, _)| {
                 if let Some(&last_token) = seq.last() {
@@ -672,16 +702,19 @@ impl LLM {
                 break;
             }
         }
-        
+
         // Select the beam with the highest probability
-        if let Some((best_seq, _)) = current_beams.iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal)) {
+        if let Some((best_seq, _)) = current_beams
+            .iter()
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal))
+        {
             // Convert token IDs back to text
             let token_strs = best_seq
                 .iter()
                 .map(|&t| self.vocab.decode[&t].clone())
                 .filter(|s| s != "</s>") // Remove end token
                 .collect::<Vec<String>>();
-            
+
             // Apply post-processing to improve fluency and accuracy
             let raw_output = token_strs.join(" ");
             self.post_process_chinese_text(&raw_output)
@@ -689,9 +722,15 @@ impl LLM {
             String::new() // Return empty string if no valid sequence is found
         }
     }
-    
+
     /// Generate text based on the given context tokens
-    fn generate_with_context(&mut self, context_tokens: &[usize], temperature: f32, top_p: f32, top_k: usize) -> String {
+    fn generate_with_context(
+        &mut self,
+        context_tokens: &[usize],
+        temperature: f32,
+        top_p: f32,
+        top_k: usize,
+    ) -> String {
         let mut tokenized = context_tokens.to_vec();
         let mut output_tokens: Vec<usize> = Vec::new();
 
@@ -758,16 +797,16 @@ impl LLM {
         let raw_output = token_strs.join(" ");
         self.post_process_chinese_text(&raw_output)
     }
-    
+
     /// Post-process generated Chinese text to improve fluency and accuracy
     pub fn post_process_chinese_text(&self, text: &str) -> String {
         // Remove extra spaces between Chinese characters
         let mut result = String::new();
         let mut chars = text.chars().peekable();
-        
+
         while let Some(ch) = chars.next() {
             result.push(ch);
-            
+
             // If current and next characters are both Chinese, don't add space
             if let Some(&next_ch) = chars.peek() {
                 if self.is_chinese_char(ch) && self.is_chinese_char(next_ch) {
@@ -778,15 +817,15 @@ impl LLM {
                 }
             }
         }
-        
+
         // Additional processing could include:
         // - Grammar pattern correction
         // - Ensuring proper sentence structure
         // - Removing repetitive patterns
-        
+
         result
     }
-    
+
     /// Helper function to check if a character is Chinese
     fn is_chinese_char(&self, ch: char) -> bool {
         (ch as u32) >= 0x4E00 && (ch as u32) <= 0x9FFF

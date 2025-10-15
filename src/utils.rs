@@ -1,7 +1,6 @@
 /// 工具函数模块
 ///
 /// 包含数学运算、激活函数等通用工具
-
 use ndarray::Array2;
 
 // Softmax专用的epsilon常量（避免除零）
@@ -52,12 +51,20 @@ mod tests {
         // 检查每行和为1
         for row in output.rows() {
             let sum: f32 = row.sum();
-            assert!((sum - 1.0).abs() < 1e-6, "Row sum should be 1.0, got {}", sum);
+            assert!(
+                (sum - 1.0).abs() < 1e-6,
+                "Row sum should be 1.0, got {}",
+                sum
+            );
         }
 
         // 检查所有值在[0, 1]区间
         for &val in output.iter() {
-            assert!(val >= 0.0 && val <= 1.0, "Value should be in [0, 1], got {}", val);
+            assert!(
+                val >= 0.0 && val <= 1.0,
+                "Value should be in [0, 1], got {}",
+                val
+            );
         }
     }
 

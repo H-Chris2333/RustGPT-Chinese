@@ -102,10 +102,10 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::OnceLock;
 
-use bincode::{Encode, Decode};
+use bincode::{Decode, Encode};
 use jieba_rs::Jieba;
 use regex::Regex;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use std::fs;
 
@@ -284,7 +284,10 @@ impl Vocab {
     /// ID 0-6:  特殊词元（固定分配）
     /// ID 7+:   常规词汇（动态分配，按添加顺序）
     /// ```
-    pub fn new_with_special_tokens(words: Vec<&str>, special_tokens: HashMap<String, usize>) -> Self {
+    pub fn new_with_special_tokens(
+        words: Vec<&str>,
+        special_tokens: HashMap<String, usize>,
+    ) -> Self {
         let mut encode = HashMap::new();
         let mut decode = HashMap::new();
 
@@ -316,7 +319,9 @@ impl Vocab {
                 decode.insert(next_id, word_str.clone());
 
                 // 判断词元类型
-                let is_chinese = word_str.chars().any(|c| (c as u32) >= 0x4E00 && (c as u32) <= 0x9FFF);
+                let is_chinese = word_str
+                    .chars()
+                    .any(|c| (c as u32) >= 0x4E00 && (c as u32) <= 0x9FFF);
                 if is_chinese {
                     chinese_count += 1;
                     println!("  [中文] '{}' -> ID {}", word_str, next_id);
@@ -329,7 +334,10 @@ impl Vocab {
                 next_id += 1;
             } else {
                 skipped_count += 1;
-                println!("  [跳过] '{}' (已存在，ID: {})", word_str, encode[&word_str]);
+                println!(
+                    "  [跳过] '{}' (已存在，ID: {})",
+                    word_str, encode[&word_str]
+                );
             }
         }
 
@@ -453,7 +461,9 @@ impl Vocab {
         let mut tokens = Vec::new();
 
         // Check if the text contains Chinese characters
-        let has_chinese = text.chars().any(|c| (c as u32) >= 0x4E00 && (c as u32) <= 0x9FFF);
+        let has_chinese = text
+            .chars()
+            .any(|c| (c as u32) >= 0x4E00 && (c as u32) <= 0x9FFF);
 
         if has_chinese {
             let jieba = jieba_instance(); // 使用全局实例
@@ -566,7 +576,14 @@ impl Vocab {
     ///
     /// 实际训练中，词汇表会从训练数据动态构建。
     pub fn default_words() -> Vec<&'static str> {
-        vec!["hello", "world", "this", "is", "rust", "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by", "from", "up", "about", "into", "through", "during", "before", "after", "above", "below", "between", "among", "as", "if", "when", "where", "why", "how", "all", "any", "both", "each", "few", "more", "most", "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very", "can", "will", "just", "don", "should", "now"]
+        vec![
+            "hello", "world", "this", "is", "rust", "the", "a", "an", "and", "or", "but", "in",
+            "on", "at", "to", "for", "of", "with", "by", "from", "up", "about", "into", "through",
+            "during", "before", "after", "above", "below", "between", "among", "as", "if", "when",
+            "where", "why", "how", "all", "any", "both", "each", "few", "more", "most", "other",
+            "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very",
+            "can", "will", "just", "don", "should", "now",
+        ]
     }
 
     /// **默认特殊词元配置**
@@ -589,10 +606,10 @@ impl Vocab {
         special_tokens.insert("<|pad|>".to_string(), 0);
         special_tokens.insert("<|unk|>".to_string(), 1);
         special_tokens.insert("<|bos|>".to_string(), 2);
-        special_tokens.insert("</s>".to_string(), 3);  // End of sequence
-        special_tokens.insert("<|sep|>".to_string(), 4);  // Separator
-        special_tokens.insert("<|cls|>".to_string(), 5);  // Classification
-        special_tokens.insert("<|mask|>".to_string(), 6);  // Masked token
+        special_tokens.insert("</s>".to_string(), 3); // End of sequence
+        special_tokens.insert("<|sep|>".to_string(), 4); // Separator
+        special_tokens.insert("<|cls|>".to_string(), 5); // Classification
+        special_tokens.insert("<|mask|>".to_string(), 6); // Masked token
         special_tokens
     }
 
@@ -695,7 +712,9 @@ impl Vocab {
             std::io::stdout().flush().unwrap();
 
             // Check if the text contains Chinese characters
-            let has_chinese = text.chars().any(|c| (c as u32) >= 0x4E00 && (c as u32) <= 0x9FFF);
+            let has_chinese = text
+                .chars()
+                .any(|c| (c as u32) >= 0x4E00 && (c as u32) <= 0x9FFF);
 
             if has_chinese {
                 chinese_texts += 1;
@@ -846,7 +865,7 @@ impl Vocab {
         if !chars.all(|c| c.is_chinese()) {
             return false;
         }
-        common_idioms().contains(idiom)  // This works because HashSet<String> implements contains for &str
+        common_idioms().contains(idiom) // This works because HashSet<String> implements contains for &str
     }
 
     /// **检查是否为有意义的中文短语**

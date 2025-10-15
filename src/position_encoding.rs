@@ -212,7 +212,8 @@ impl RelativePositionEncoding {
         for offset in 0..total_positions {
             let relative_pos = offset as i32 - max_offset as i32;
             for i in 0..EMBEDDING_DIM {
-                let angle = relative_pos as f32 / 10000f32.powf((i / 2) as f32 / EMBEDDING_DIM as f32);
+                let angle =
+                    relative_pos as f32 / 10000f32.powf((i / 2) as f32 / EMBEDDING_DIM as f32);
 
                 if i % 2 == 0 {
                     encoding[[offset, i]] = angle.sin();
@@ -222,7 +223,10 @@ impl RelativePositionEncoding {
             }
         }
 
-        Self { encoding, max_offset }
+        Self {
+            encoding,
+            max_offset,
+        }
     }
 
     /// 获取指定相对位置的编码

@@ -71,7 +71,8 @@
 use ndarray::Array2;
 
 use crate::{
-    dropout::Dropout, feed_forward::FeedForward, layer_norm::LayerNorm, llm::Layer, self_attention::SelfAttention,
+    dropout::Dropout, feed_forward::FeedForward, layer_norm::LayerNorm, llm::Layer,
+    self_attention::SelfAttention,
 };
 
 /// **Transformer 块结构体**

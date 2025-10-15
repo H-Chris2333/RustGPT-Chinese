@@ -49,7 +49,7 @@
 //! ```
 
 use ndarray::Array2;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 
 use crate::llm::Layer;
 
@@ -128,7 +128,11 @@ impl Dropout {
 
                 // 如果随机数 > dropout_rate，保留该神经元
                 // 例如：dropout_rate=0.2，则 80% 概率保留（random_val > 0.2）
-                *element = if random_val > self.dropout_rate { 1.0 } else { 0.0 };
+                *element = if random_val > self.dropout_rate {
+                    1.0
+                } else {
+                    0.0
+                };
             }
         }
 
