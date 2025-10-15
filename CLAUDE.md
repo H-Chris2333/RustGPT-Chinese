@@ -59,16 +59,16 @@ This is a **pure Rust, from-scratch implementation** with no PyTorch, TensorFlow
 ### Data Flow
 
 ```
-Input Text → Jieba Tokenization → Token IDs → Embeddings (512d)
-    → 4x Transformer Blocks (attention + FFN + dropout + layer norm)
+Input Text → Jieba Tokenization → Token IDs → Embeddings (256d)
+    → 2x Transformer Blocks (attention + FFN + dropout + layer norm)
     → Output Projection → Softmax → Token Predictions
 ```
 
 ### Key Architecture Components
 
 **Network Stack (in order):**
-1. **Embeddings Layer** (`embeddings.rs`) - Token embedding with semantic enhancement for Chinese
-2. **4x Transformer Blocks** (`transformer.rs`) - Each contains:
+1. **Embeddings Layer** (`embeddings.rs`) - Token embedding optimized for Chinese
+2. **2x Transformer Blocks** (`transformer.rs`) - Each contains:
    - Multi-head self-attention (8 heads, `self_attention.rs`)
    - Feed-forward network (`feed_forward.rs`)
    - 2x Dropout layers (10% rate, `dropout.rs`)
@@ -82,35 +82,46 @@ Input Text → Jieba Tokenization → Token IDs → Embeddings (512d)
 - **Adam Optimizer** (`adam.rs`) - Gradient-based optimization with momentum
 - **Dataset Loader** (`dataset_loader.rs`) - Loads pre-training and chat training data from JSON
 
-### Model Configuration (lib.rs)
+### Model Configuration (lib.rs) - v0.3.0
 
 ```rust
-MAX_SEQ_LEN: 256        // Increased for longer Chinese sentences
-EMBEDDING_DIM: 512      // Enhanced for Chinese character representation
-HIDDEN_DIM: 1024        // Enhanced for complex Chinese patterns
+MAX_SEQ_LEN: 128        // Optimized for small datasets (was 256)
+EMBEDDING_DIM: 256      // Reduced for better convergence on limited data (was 512)
+HIDDEN_DIM: 512         // Reduced for better convergence on limited data (was 1024)
 VOCAB_SIZE: 30000       // Target vocab size (dynamically built from data)
 ```
 
-### Training Pipeline (main.rs)
+**Why these changes in v0.3.0?**
+- Smaller model = fewer parameters = better fit for 200-500 training samples
+- Reduces risk of severe underfitting when training data is limited
+- Parameter count reduced from ~70M to ~10M (86% reduction)
+
+### Training Pipeline (main.rs) - v0.3.0
 
 The training process has two phases:
 
 1. **Vocabulary Building**: Processes both pre-training and chat training data using jieba-rs to extract all unique tokens (Chinese words, idioms, punctuation, special tokens)
 
-2. **Pre-training** (100 epochs, LR=0.0005):
+2. **Pre-training** (500 epochs, LR=0.001):
    - Loads data from `data/pretraining_data.json`
    - Learns Chinese world knowledge and factual statements
+   - Higher learning rate and more epochs for small dataset optimization
    - Uses learning rate decay (0.95 per 10 steps)
 
-3. **Instruction Tuning** (100 epochs, LR=0.0001):
+3. **Instruction Tuning** (500 epochs, LR=0.0005):
    - Loads data from `data/chat_training_data.json`
    - Learns conversational Chinese patterns
+   - Higher learning rate and more epochs for small dataset optimization
    - Uses learning rate decay
 
 4. **Interactive Mode**:
    - Beam search decoding (width=3, max_length=20)
    - Context window management for multi-turn conversations
    - Chinese text post-processing to remove extra spaces
+
+**Training Data Changes (v0.3.0):**
+- Removed `</s>` tokens from all training data to prevent output contamination
+- Cleaner training signal = better model quality
 
 ### Chinese Language Handling
 
@@ -146,9 +157,9 @@ The training process has two phases:
 - Each layer updates its own parameters with Adam optimizer
 
 **Context Management:**
-- Context window maintains conversation history (up to MAX_SEQ_LEN tokens)
+- Context window maintains conversation history (up to MAX_SEQ_LEN tokens, 128 in v0.3.0)
 - Oldest tokens removed when exceeding max length
-- Context cleared on `</s>` token detection
+- Context cleared on `</s>` token detection (though `</s>` removed from training data in v0.3.0)
 
 ### Layer Interface (llm.rs)
 
@@ -165,17 +176,22 @@ trait Layer {
 
 ### Transformer Block Details (transformer.rs)
 
-Each block applies this sequence:
-1. Self-attention → Layer norm → Dropout (10%)
-2. Feed-forward → Dropout (10%) → Layer norm
+Each block applies this sequence (Pre-LN architecture):
+1. LayerNorm → Self-attention → Dropout (10%) → Residual connection
+2. LayerNorm → Feed-forward → Dropout (10%) → Residual connection
 
-Note: Residual connections are NOT currently implemented (they should be added in the attention and feed-forward steps for training stability).
+Note: v0.2.0 upgraded to Pre-LN architecture with explicit residual connections for better training stability.
 
 ### Special Tokens
 
 Defined in `vocab.rs`:
 - `<|pad|>` (ID: 0) - Padding
 - `<|unk|>` (ID: 1) - Unknown tokens
+- `<|bos|>` (ID: 2) - Beginning of sequence
+- `</s>` (ID: 3) - End of sequence (note: removed from training data in v0.3.0 but still defined in vocab)
+- `<|sep|>` (ID: 4) - Separator
+- `<|cls|>` (ID: 5) - Classification
+- `<|mask|>` (ID: 6) - Masked token
 - `<|bos|>` (ID: 2) - Beginning of sequence
 - `</s>` (ID: 3) - End of sequence (used to trigger context clearing)
 - `<|sep|>` (ID: 4) - Separator
@@ -196,11 +212,13 @@ Defined in `vocab.rs`:
 ### Modifying Training Data
 
 Training data is loaded from JSON files in `data/`:
-- `data/pretraining_data.json` - Array of Chinese factual statements
-- `data/chat_training_data.json` - Array of conversational exchanges
+- `data/pretraining_data.json` - Array of Chinese factual statements (no `</s>` tokens in v0.3.0)
+- `data/chat_training_data.json` - Array of conversational exchanges (no `</s>` tokens in v0.3.0)
 - `data/chinese_idioms.json` - Array of 4-character Chinese idioms
 
 Format: Simple JSON arrays of strings.
+
+**v0.3.0 Note**: `</s>` tokens were removed from training data to prevent output contamination and improve model quality.
 
 ### Working with Chinese Text
 
@@ -230,7 +248,14 @@ Tests are organized by component in the `tests/` directory. Each test file corre
 
 ## Known Limitations
 
-- No model persistence (training state is lost between runs)
+- Model persistence is supported via binary (.bin) and JSON formats (see `model_serialization.rs`)
+- Small model size (v0.3.0: 10M parameters) limits generalization beyond training data
+- Training data limited to ~250 samples - more data needed for production use
+- No attention masking for autoregressive generation (relies on teacher forcing)
+- No batching support (processes one sequence at a time)
+- Training data is loaded from JSON files (expandable)
+- No learning rate warmup (uses exponential decay only)
+- No gradient accumulation
 - No residual connections in transformer blocks (reduces training stability)
 - Limited vocabulary size (dynamically built from training data only)
 - No attention masking for autoregressive generation
