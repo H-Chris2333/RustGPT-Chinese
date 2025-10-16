@@ -485,7 +485,7 @@ impl LLM {
             start_time.elapsed().as_secs_f32()
         );
 
-        let mut early_stopping = EarlyStopping::new(patience, 0.001);
+        let mut early_stopping = EarlyStopping::new(patience, 0.01);
         let training_start_time = std::time::Instant::now();
 
         for epoch in 0..max_epochs {
@@ -530,7 +530,7 @@ impl LLM {
                 // 🔥 优化4：记录梯度范数（用于监控）
                 total_grad_norm += Self::compute_grad_norm(&grads_output);
 
-                Self::clip_gradients(&mut grads_output, 5.0);
+                Self::clip_gradients(&mut grads_output, 2.0);
 
                 // 🔥 优化5：梯度累积逻辑（修复形状兼容性问题）
                 // 由于变长序列导致梯度形状不同，只在形状兼容时进行累积
