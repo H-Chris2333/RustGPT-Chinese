@@ -30,6 +30,67 @@ pub struct LLM {
     pub training: bool,
 }
 
+/// 早停机制
+///
+/// 监控训练loss，如果长时间不改善则自动停止训练
+pub struct EarlyStopping {
+    /// 容忍多少个epoch loss不改善
+    patience: usize,
+
+    /// 当前最佳loss
+    best_loss: f32,
+
+    /// 已经多少个epoch没有改善
+    counter: usize,
+
+    /// 最小改善幅度（小于这个值不算改善）
+    min_delta: f32,
+
+    /// 最佳模型所在的epoch
+    best_epoch: usize,
+}
+
+impl EarlyStopping {
+    /// 创建早停监控器
+    ///
+    /// # 参数
+    /// - `patience`: 容忍epoch数（推荐30-50）
+    /// - `min_delta`: 最小改善幅度（推荐0.001）
+    pub fn new(patience: usize, min_delta: f32) -> Self {
+        Self {
+            patience,
+            best_loss: f32::INFINITY,
+            counter: 0,
+            min_delta,
+            best_epoch: 0,
+        }
+    }
+
+    /// 检查是否应该停止训练
+    ///
+    /// # 返回值
+    /// - `true`: 应该停止训练
+    /// - `false`: 继续训练
+    pub fn should_stop(&mut self, current_loss: f32, current_epoch: usize) -> bool {
+        // 如果loss有明显改善
+        if current_loss < self.best_loss - self.min_delta {
+            self.best_loss = current_loss;
+            self.best_epoch = current_epoch;
+            self.counter = 0;
+            false
+        } else {
+            // loss没有改善
+            self.counter += 1;
+            self.counter >= self.patience
+        }
+    }
+
+    /// 获取最佳loss和对应的epoch
+    pub fn best_state(&self) -> (f32, usize) {
+        (self.best_loss, self.best_epoch)
+    }
+}
+
 impl Default for LLM {
     fn default() -> Self {
         let transformer_block_1 = TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM);
@@ -339,6 +400,212 @@ impl LLM {
         }
 
         self.set_training_mode(false);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // 🚀 阶段1训练优化 - 性能优化方法
+    // ═════════════════════════════════════════════════════════════════════════════
+
+    /// 余弦退火学习率调度（带重启）
+    ///
+    /// # 参数
+    /// - `initial_lr`: 初始学习率（如 0.001）
+    /// - `epoch`: 当前epoch
+    /// - `total_epochs`: 总epoch数
+    /// - `num_restarts`: 重启次数（如2表示训练分为3个周期）
+    ///
+    /// # 示例
+    /// ```rust
+    /// // 500 epochs, 2次重启，每个周期约166 epochs
+    /// let lr = LLM::cosine_annealing_lr(0.001, epoch, 500, 2);
+    /// ```
+    pub fn cosine_annealing_lr(
+        initial_lr: f32,
+        epoch: usize,
+        total_epochs: usize,
+        num_restarts: usize,
+    ) -> f32 {
+        // 计算每个周期的长度
+        let cycle_length = total_epochs / (num_restarts + 1);
+
+        // 当前在周期内的位置
+        let cycle_epoch = epoch % cycle_length;
+
+        // 周期内的进度 [0, 1]
+        let progress = cycle_epoch as f32 / cycle_length as f32;
+
+        // 最小学习率为初始值的1%
+        let min_lr = initial_lr * 0.01;
+
+        // 余弦退火公式
+        min_lr + 0.5 * (initial_lr - min_lr) * (1.0 + (std::f32::consts::PI * progress).cos())
+    }
+
+    /// 计算梯度L2范数
+    fn compute_grad_norm(grads: &Array2<f32>) -> f32 {
+        grads.iter().map(|&x| x * x).sum::<f32>().sqrt()
+    }
+
+    /// 完整优化的训练方法（集成所有阶段1优化）
+    ///
+    /// # 优化特性
+    /// - ✅ 数据预处理缓存（避免重复tokenization）
+    /// - ✅ 余弦退火学习率调度
+    /// - ✅ 早停机制
+    /// - ✅ 增强训练监控（困惑度、梯度范数、训练速度）
+    /// - ✅ 梯度累积（模拟大batch训练）
+    ///
+    /// # 参数
+    /// - `data`: 训练数据
+    /// - `max_epochs`: 最大epoch数
+    /// - `initial_lr`: 初始学习率
+    /// - `patience`: 早停容忍epoch数
+    /// - `accumulation_steps`: 梯度累积步数（推荐4-8）
+    ///
+    /// # 返回值
+    /// 实际训练的epoch数
+    pub fn train_monitored(
+        &mut self,
+        data: Vec<&str>,
+        max_epochs: usize,
+        initial_lr: f32,
+        patience: usize,
+        accumulation_steps: usize,
+    ) -> usize {
+        self.set_training_mode(true);
+
+        // 🔥 优化1：数据预处理缓存（一次性tokenize，避免重复计算）
+        println!("📝 正在预处理训练数据...");
+        let start_time = std::time::Instant::now();
+        let tokenized_data: Vec<Vec<usize>> =
+            data.iter().map(|input| self.tokenize(input)).collect();
+        println!(
+            "✅ 数据预处理完成，共 {} 个序列（耗时 {:.2}s）",
+            tokenized_data.len(),
+            start_time.elapsed().as_secs_f32()
+        );
+
+        let mut early_stopping = EarlyStopping::new(patience, 0.001);
+        let training_start_time = std::time::Instant::now();
+
+        for epoch in 0..max_epochs {
+            let epoch_start = std::time::Instant::now();
+
+            // 🔥 优化2：余弦退火学习率调度
+            let current_lr = Self::cosine_annealing_lr(initial_lr, epoch, max_epochs, 2);
+
+            let mut total_loss = 0.0;
+            let mut total_grad_norm = 0.0;
+            let mut sample_count = 0;
+
+            // 🔥 优化5：梯度累积相关变量
+            let mut accumulated_grads: Option<Array2<f32>> = None;
+            let mut step_count = 0;
+
+            for (idx, training_row) in tokenized_data.iter().enumerate() {
+                if training_row.len() < 2 {
+                    continue;
+                }
+
+                // 前向传播
+                let input_ids = &training_row[..training_row.len() - 1];
+                let target_ids = &training_row[1..];
+
+                let mut input: Array2<f32> = Array2::zeros((1, input_ids.len()));
+                input
+                    .row_mut(0)
+                    .assign(&input_ids.iter().map(|&x| x as f32).collect::<Array1<f32>>());
+
+                for layer in &mut self.network {
+                    input = layer.forward(&input);
+                }
+
+                let logits = input;
+                let probs = softmax(&logits);
+                total_loss += Self::cross_entropy_loss_step(&probs, target_ids);
+
+                // 计算梯度但不立即更新
+                let mut grads_output = Self::compute_gradients_step(&probs, target_ids);
+
+                // 🔥 优化4：记录梯度范数（用于监控）
+                total_grad_norm += Self::compute_grad_norm(&grads_output);
+
+                Self::clip_gradients(&mut grads_output, 5.0);
+
+                // 🔥 优化5：梯度累积逻辑
+                if accumulated_grads.is_none() {
+                    accumulated_grads = Some(grads_output.clone());
+                } else if let Some(ref mut acc_grads) = accumulated_grads {
+                    *acc_grads = &*acc_grads + &grads_output;
+                }
+
+                step_count += 1;
+
+                // 每accumulation_steps步或最后一个样本时更新参数
+                let should_update =
+                    step_count >= accumulation_steps || idx == tokenized_data.len() - 1;
+
+                if should_update {
+                    if let Some(mut acc_grads) = accumulated_grads.take() {
+                        // 平均梯度（重要！）
+                        acc_grads.mapv_inplace(|x| x / step_count as f32);
+
+                        // 反向传播更新参数
+                        let mut current_grad = acc_grads;
+                        for layer in self.network.iter_mut().rev() {
+                            current_grad = layer.backward(&current_grad, current_lr);
+                        }
+                    }
+
+                    step_count = 0;
+                }
+
+                sample_count += 1;
+            }
+
+            let epoch_time = epoch_start.elapsed().as_secs_f32();
+            let avg_loss = total_loss / sample_count as f32;
+            let avg_grad_norm = total_grad_norm / sample_count as f32;
+            let perplexity = avg_loss.exp();
+            let samples_per_sec = sample_count as f32 / epoch_time;
+
+            // 🔥 优化4：增强训练监控输出
+            if epoch % 10 == 0 || epoch == max_epochs - 1 {
+                let progress = (epoch + 1) as f32 / max_epochs as f32 * 100.0;
+                let elapsed = training_start_time.elapsed().as_secs();
+                let eta =
+                    (elapsed as f32 / (epoch + 1) as f32 * (max_epochs - epoch - 1) as f32) as u64;
+
+                println!(
+                    "[{:3}/{}] {:6.1}% | Loss: {:.4} | PPL: {:6.2} | LR: {:.6} | Grad: {:6.4} | Speed: {:5.1} samples/s | ETA: {}s",
+                    epoch + 1,
+                    max_epochs,
+                    progress,
+                    avg_loss,
+                    perplexity,
+                    current_lr,
+                    avg_grad_norm,
+                    samples_per_sec,
+                    eta
+                );
+            }
+
+            // 🔥 优化3：早停机制检查
+            if early_stopping.should_stop(avg_loss, epoch) {
+                let (best_loss, best_epoch) = early_stopping.best_state();
+                println!("\n🛑 早停触发:");
+                println!("   • 最佳epoch: {}", best_epoch + 1);
+                println!("   • 最佳loss: {:.4}", best_loss);
+                println!("   • 停止epoch: {}", epoch + 1);
+                println!("   • 节省时间: {} epochs", max_epochs - epoch);
+
+                self.set_training_mode(false);
+                return epoch + 1; // 返回实际训练的epoch数
+            }
+        }
+
+        self.set_training_mode(false);
+        max_epochs
     }
 
     /// Add tokens to the context window, maintaining the maximum length
