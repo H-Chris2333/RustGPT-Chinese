@@ -532,20 +532,32 @@ impl LLM {
 
                 Self::clip_gradients(&mut grads_output, 5.0);
 
-                // 🔥 优化5：梯度累积逻辑
+                // 🔥 优化5：梯度累积逻辑（修复形状兼容性问题）
+                // 由于变长序列导致梯度形状不同，只在形状兼容时进行累积
                 if accumulated_grads.is_none() {
                     accumulated_grads = Some(grads_output.clone());
+                    step_count += 1;
                 } else if let Some(ref mut acc_grads) = accumulated_grads {
-                    *acc_grads = &*acc_grads + &grads_output;
+                    // 检查形状是否兼容
+                    if acc_grads.shape() == grads_output.shape() {
+                        *acc_grads = &*acc_grads + &grads_output;
+                        step_count += 1;
+                    } else {
+                        // 形状不兼容时，直接使用当前梯度更新参数并重置累积
+                        let mut current_grad = grads_output;
+                        for layer in self.network.iter_mut().rev() {
+                            current_grad = layer.backward(&current_grad, current_lr);
+                        }
+                        accumulated_grads = None;
+                        step_count = 0;
+                    }
                 }
-
-                step_count += 1;
 
                 // 每accumulation_steps步或最后一个样本时更新参数
                 let should_update =
                     step_count >= accumulation_steps || idx == tokenized_data.len() - 1;
 
-                if should_update {
+                if should_update && accumulated_grads.is_some() {
                     if let Some(mut acc_grads) = accumulated_grads.take() {
                         // 平均梯度（重要！）
                         acc_grads.mapv_inplace(|x| x / step_count as f32);
