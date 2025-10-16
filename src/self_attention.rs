@@ -142,6 +142,9 @@ pub struct SelfAttention {
     /// - false: 训练模式（需要完整梯度）
     pub use_kv_cache: bool,
 
+    /// **是否冻结注意力层参数更新**（用于稳定训练排障）
+    pub freeze_updates: bool,
+
     // ========== Adam 优化器（每个权重矩阵一个） ==========
     pub optimizer_w_q: Adam,
     pub optimizer_w_k: Adam,
@@ -211,6 +214,7 @@ impl SelfAttention {
             cached_attention_output: None,
             kv_cache: None,      // 默认不使用 KV 缓存
             use_kv_cache: false, // 默认训练模式
+            freeze_updates: false,
             optimizer_w_q: Adam::new((embedding_dim, embedding_dim)),
             optimizer_w_k: Adam::new((embedding_dim, embedding_dim)),
             optimizer_w_v: Adam::new((embedding_dim, embedding_dim)),
@@ -597,11 +601,13 @@ impl Layer for SelfAttention {
         let grad_w_k = input.t().dot(grad_k);
         let grad_w_v = input.t().dot(grad_v);
 
-        // 使用Adam优化器更新权重
-        self.optimizer_w_o.step(&mut self.w_o, &grad_w_o, lr);
-        self.optimizer_w_q.step(&mut self.w_q, &grad_w_q, lr);
-        self.optimizer_w_k.step(&mut self.w_k, &grad_w_k, lr);
-        self.optimizer_w_v.step(&mut self.w_v, &grad_w_v, lr);
+        // 使用Adam优化器更新权重（可选冻结）
+        if !self.freeze_updates {
+            self.optimizer_w_o.step(&mut self.w_o, &grad_w_o, lr);
+            self.optimizer_w_q.step(&mut self.w_q, &grad_w_q, lr);
+            self.optimizer_w_k.step(&mut self.w_k, &grad_w_k, lr);
+            self.optimizer_w_v.step(&mut self.w_v, &grad_w_v, lr);
+        }
 
         // ========== 步骤4: 计算传播回输入的梯度 ==========
         // input的梯度来自Q、K、V三条路径

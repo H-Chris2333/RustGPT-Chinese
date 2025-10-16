@@ -292,6 +292,7 @@ impl SerializableLayer {
             cached_attention_output: None,
             kv_cache: None,      // KV缓存初始化为None
             use_kv_cache: false, // 默认不使用KV缓存
+            freeze_updates: false,
             optimizer_w_q: s.optimizer_w_q.to_adam(),
             optimizer_w_k: s.optimizer_w_k.to_adam(),
             optimizer_w_v: s.optimizer_w_v.to_adam(),

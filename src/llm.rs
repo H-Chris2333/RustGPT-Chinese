@@ -4,7 +4,7 @@ use ndarray::{Array1, Array2, Axis};
 use rand::Rng;
 use rand::rng;
 
-use crate::utils::softmax;
+use crate::utils::{softmax, log_softmax};
 use crate::{
     EMBEDDING_DIM, Embeddings, HIDDEN_DIM, LOG_EPSILON, MAX_SEQ_LEN, SOFTMAX_EPSILON, Vocab,
     output_projection::OutputProjection, transformer::TransformerBlock,
@@ -370,14 +370,14 @@ impl LLM {
                 }
 
                 let logits = input;
-                let probs = softmax(&logits);
+                let log_probs = log_softmax(&logits);
+                total_loss += Self::cross_entropy_from_log_probs(&log_probs, target_ids);
 
-                total_loss += Self::cross_entropy_loss_step(&probs, target_ids);
+                // Backward pass: grad = softmax(logits) - one_hot
+                let probs = log_probs.mapv(|x| x.exp());
+                let mut grads_output = Self::compute_gradients_step(&probs, target_ids);
 
-                // Backward pass
-                let mut grads_output = Self::compute_gradients_step(&probs, target_ids); // this is d_L/d_output_projection
-
-                Self::clip_gradients(&mut grads_output, 5.0);
+                Self::clip_gradients(&mut grads_output, 1.0);
 
                 for layer in self.network.iter_mut().rev() {
                     grads_output = layer.backward(&grads_output, current_lr);
@@ -491,14 +491,14 @@ impl LLM {
         for epoch in 0..max_epochs {
             let epoch_start = std::time::Instant::now();
 
-            // 🔥 优化2：余弦退火学习率调度
-            let current_lr = Self::cosine_annealing_lr(initial_lr, epoch, max_epochs, 2);
+            // 🔥 优化2：余弦退火学习率调度（禁用重启以提升稳定性）
+            let current_lr = Self::cosine_annealing_lr(initial_lr, epoch, max_epochs, 0);
 
             let mut total_loss = 0.0;
             let mut total_grad_norm = 0.0;
             let mut sample_count = 0;
 
-            // 🔥 优化5：梯度累积相关变量
+            // 🔥 优化5：梯度累积相关变量（暂时禁用累积：steps=1 提升稳定性）
             let mut accumulated_grads: Option<Array2<f32>> = None;
             let mut step_count = 0;
 
@@ -521,16 +521,19 @@ impl LLM {
                 }
 
                 let logits = input;
-                let probs = softmax(&logits);
-                total_loss += Self::cross_entropy_loss_step(&probs, target_ids);
+                // 使用 log_softmax + NLL 提升数值稳定性
+                let log_probs = log_softmax(&logits);
+                total_loss += Self::cross_entropy_from_log_probs(&log_probs, target_ids);
 
-                // 计算梯度但不立即更新
+                // 计算梯度但不立即更新：softmax(logits) - one_hot(target)
+                let probs = log_probs.mapv(|x| x.exp());
                 let mut grads_output = Self::compute_gradients_step(&probs, target_ids);
 
                 // 🔥 优化4：记录梯度范数（用于监控）
                 total_grad_norm += Self::compute_grad_norm(&grads_output);
 
-                Self::clip_gradients(&mut grads_output, 2.0);
+                // 更强的梯度裁剪提升稳定性
+                Self::clip_gradients(&mut grads_output, 1.0);
 
                 // 🔥 优化5：梯度累积逻辑（修复形状兼容性问题）
                 // 由于变长序列导致梯度形状不同，只在形状兼容时进行累积
@@ -553,6 +556,7 @@ impl LLM {
                     }
                 }
 
+                // 每accumulation_steps步或最后一个样本时更新参数
                 // 每accumulation_steps步或最后一个样本时更新参数
                 let should_update =
                     step_count >= accumulation_steps || idx == tokenized_data.len() - 1;
@@ -602,7 +606,7 @@ impl LLM {
                 );
             }
 
-            // 🔥 优化3：早停机制检查
+            // 🔥 优化3：早停机制检查（建议较短耐心，用于小数据集快速迭代）
             if early_stopping.should_stop(avg_loss, epoch) {
                 let (best_loss, best_epoch) = early_stopping.best_state();
                 println!("\n🛑 早停触发:");
@@ -1110,20 +1114,21 @@ impl LLM {
         (ch as u32) >= 0x4E00 && (ch as u32) <= 0x9FFF
     }
 
-    fn cross_entropy_loss_step(probs: &Array2<f32>, target: &[usize]) -> f32 {
+    fn cross_entropy_from_log_probs(log_probs: &Array2<f32>, target: &[usize]) -> f32 {
+        // 使用 log_softmax 输出计算交叉熵，避免对概率取对数的数值不稳定
         let mut loss = 0.0;
         let n_targets = target.len() as f32;
 
         for (row_idx, &target_idx) in target.iter().enumerate() {
-            let prob_target = probs[[row_idx, target_idx]]; // Get probability of correct token
-            loss -= prob_target.max(LOG_EPSILON).ln(); // 使用统一的LOG_EPSILON保证数值稳定性
+            let lp = log_probs[[row_idx, target_idx]];
+            loss -= lp; // NLL: -log p(target)
         }
 
         loss / n_targets
     }
 
     fn compute_gradients_step(probs: &Array2<f32>, target: &[usize]) -> Array2<f32> {
-        let mut grads = probs.clone(); // Start with softmax probabilities
+        let mut grads = probs.clone(); // softmax - one_hot(target)
 
         if probs.shape()[0] != target.len() {
             panic!("Probs and target must have the same number of rows");
@@ -1131,22 +1136,17 @@ impl LLM {
 
         let batch_size = target.len() as f32;
 
-        // Compute correct softmax + cross-entropy gradient: softmax - one_hot(target)
         for (row_idx, &target_idx) in target.iter().enumerate() {
-            grads[[row_idx, target_idx]] -= 1.0; // Convert to: p - y (where y is one-hot)
+            grads[[row_idx, target_idx]] -= 1.0;
         }
 
-        // Normalize by batch size for stable training
         grads.mapv_inplace(|x| x / batch_size);
-
         grads
     }
 
     fn clip_gradients(grads: &mut Array2<f32>, max_norm: f32) {
-        // Calculate L2 norm of gradients
+        // 计算L2范数并裁剪
         let norm = grads.iter().map(|&x| x * x).sum::<f32>().sqrt();
-
-        // If norm exceeds max_norm, scale gradients down
         if norm > max_norm {
             let scale = max_norm / norm;
             grads.mapv_inplace(|x| x * scale);

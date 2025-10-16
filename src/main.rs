@@ -231,10 +231,10 @@ fn train_new_model(perf_monitor: &mut PerformanceMonitor) -> LLM {
     println!("║            阶段1: 预训练 (Pre-training) - 优化版          ║");
     println!("╚═══════════════════════════════════════════════════════════╝");
     println!("   • 训练样本: {}", dataset.pretraining_data.len());
-    println!("   • 最大epochs: 500 (早停patience=80)");
-    println!("   • 学习率: 0.0005 (余弦退火, 2次重启)");
-    println!("   • 梯度累积: 4步 (等效batch_size=4)");
-    println!("   • 优化: 数据缓存 + 余弦退火 + 早停 + 梯度累积\n");
+    println!("   • 最大epochs: 500 (早停patience=30)");
+    println!("   • 学习率: 0.0001 (余弦退火, 无重启)");
+    println!("   • 梯度累积: 1步 (暂时禁用以提升稳定性)");
+    println!("   • 优化: 数据缓存 + 余弦退火(无重启) + 早停 + 梯度裁剪\n");
 
     let pretraining_examples: Vec<&str> = dataset
         .pretraining_data
@@ -246,9 +246,9 @@ fn train_new_model(perf_monitor: &mut PerformanceMonitor) -> LLM {
     let actual_epochs = llm.train_monitored(
         pretraining_examples,
         500,   // max_epochs
-        0.0005, // initial_lr (降低初始学习率提高稳定性)
-        80,    // patience (增加早停容忍到80个epoch)
-        4,     // accumulation_steps (梯度累积4步)
+        0.0001, // initial_lr（更低学习率提升稳定性）
+        30,    // patience（小数据集快速迭代）
+        1,     // accumulation_steps（暂时禁用累积）
     );
     perf_monitor.stop("预训练阶段");
 
@@ -285,7 +285,7 @@ fn train_new_model(perf_monitor: &mut PerformanceMonitor) -> LLM {
         .collect();
 
     perf_monitor.start("指令微调阶段");
-    let actual_epochs = llm.train_monitored(chat_training_examples, 500, 0.0003, 80, 4);
+    let actual_epochs = llm.train_monitored(chat_training_examples, 500, 0.0003, 30, 4);
     perf_monitor.stop("指令微调阶段");
 
     println!("✓ 指令微调完成，实际训练 {} epochs", actual_epochs);

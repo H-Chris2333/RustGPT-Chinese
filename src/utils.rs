@@ -38,6 +38,33 @@ pub fn softmax(logits: &Array2<f32>) -> Array2<f32> {
     result
 }
 
+/// 稳定的 log_softmax 实现
+///
+/// 对每一行计算：log_softmax(x_i) = x_i - log(sum_j exp(x_j))，
+/// 使用减去行最大值的方式避免数值溢出。
+pub fn log_softmax(logits: &Array2<f32>) -> Array2<f32> {
+    let mut result = logits.clone();
+
+    for mut row in result.rows_mut() {
+        // 数值稳定：减去该行最大值
+        let max_val = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        // 先计算 shifted = x - max
+        let mut sum_exp = 0.0f32;
+        for v in row.iter_mut() {
+            *v = *v - max_val;
+            sum_exp += v.exp();
+        }
+        // logsumexp = log(sum(exp(shifted)))
+        let log_sum_exp = sum_exp.max(SOFTMAX_EPS).ln();
+        // log_softmax = shifted - logsumexp
+        for v in row.iter_mut() {
+            *v = *v - log_sum_exp;
+        }
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,5 +105,18 @@ mod tests {
         for &val in output.iter() {
             assert!(val.is_finite(), "Value should be finite, got {}", val);
         }
+    }
+
+    #[test]
+    fn test_log_softmax_properties() {
+        let input = Array2::from_shape_vec((1, 3), vec![1.0, 2.0, 3.0]).unwrap();
+        let ls = log_softmax(&input);
+        let s = softmax(&input);
+        for i in 0..3 {
+            assert!((ls[[0, i]].exp() - s[[0, i]]).abs() < 1e-6);
+        }
+        // log_softmax 的指数应当归一化为1
+        let sum_exp: f32 = (0..3).map(|i| ls[[0, i]].exp()).sum();
+        assert!((sum_exp - 1.0).abs() < 1e-6);
     }
 }
