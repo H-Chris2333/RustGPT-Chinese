@@ -1,13 +1,13 @@
 use std::cmp::Ordering;
 
 use ndarray::{Array1, Array2, Axis};
-use rand::Rng;
-use rand::rng;
+use rand::{Rng, rng};
 
-use crate::utils::{softmax, log_softmax};
 use crate::{
-    EMBEDDING_DIM, Embeddings, HIDDEN_DIM, LOG_EPSILON, MAX_SEQ_LEN, SOFTMAX_EPSILON, Vocab,
-    output_projection::OutputProjection, transformer::TransformerBlock,
+    EMBEDDING_DIM, Embeddings, HIDDEN_DIM, MAX_SEQ_LEN, SOFTMAX_EPSILON, Vocab,
+    output_projection::OutputProjection,
+    transformer::TransformerBlock,
+    utils::{log_softmax, softmax},
 };
 pub trait Layer {
     fn layer_type(&self) -> &str;
@@ -690,6 +690,20 @@ impl LLM {
         }
     }
 
+    /// 统一设置所有 TransformerBlock 的 SelfAttention 是否冻结参数更新
+    /// 用于在不修改网络结构的前提下，快速排查训练不稳定问题
+    pub fn set_attention_freeze_updates(&mut self, freeze: bool) {
+        for layer in &mut self.network {
+            if layer.layer_type() == "TransformerBlock" {
+                unsafe {
+                    let ptr = layer.as_mut() as *mut dyn Layer
+                        as *mut crate::transformer::TransformerBlock;
+                    (*ptr).attention.freeze_updates = freeze;
+                }
+            }
+        }
+    }
+
     /// Get current context as token IDs
     #[allow(dead_code)]
     pub fn get_context(&self) -> &[usize] {
@@ -841,12 +855,14 @@ impl LLM {
         result
     }
 
-    /// Top-p (nucleus) sampling: consider the smallest set of tokens whose cumulative probability exceeds p
+    /// Top-p (nucleus) sampling: consider the smallest set of tokens whose cumulative probability
+    /// exceeds p
     fn top_p_sampling(&self, probs: &Array2<f32>, p: f32) -> Vec<usize> {
         let mut result = Vec::new();
 
         for row in probs.rows() {
-            // Create a vector of (probability, index) pairs and sort by probability in descending order
+            // Create a vector of (probability, index) pairs and sort by probability in descending
+            // order
             let mut prob_idx_pairs: Vec<(f32, usize)> = row
                 .iter()
                 .enumerate()

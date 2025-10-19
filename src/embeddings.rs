@@ -49,9 +49,7 @@
 use ndarray::Array2;
 use rand_distr::{Distribution, Normal};
 
-use crate::{
-    EMBEDDING_DIM, adam::Adam, llm::Layer, position_encoding::PositionEncoding, vocab::Vocab,
-};
+use crate::{EMBEDDING_DIM, adam::Adam, llm::Layer, position_encoding::PositionEncoding, vocab::Vocab};
 
 /// **嵌入层结构体**
 ///
