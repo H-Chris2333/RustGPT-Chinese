@@ -422,9 +422,9 @@ fn train_new_model(perf_monitor: &mut PerformanceMonitor, freeze_attn: bool) -> 
     println!("║        阶段2: 指令微调 (Instruction Tuning) - 优化版     ║");
     println!("╚═══════════════════════════════════════════════════════════╝");
     println!("   • 训练样本: {}", dataset.chat_training_data.len());
-    println!("   • 最大epochs: 500 (早停patience=80)");
-    println!("   • 学习率: 0.0003 (余弦退火, 2次重启)");
-    println!("   • 梯度累积: 4步 (等效batch_size=4)\n");
+    println!("   • 最大epochs: 500 (早停patience=30)");
+    println!("   • 学习率: 0.0001 (余弦退火, 无重启)");
+    println!("   • 梯度累积: 1步 (稳定优先，后续可渐进恢复)\n");
 
     let chat_training_examples: Vec<&str> = dataset
         .chat_training_data
@@ -433,7 +433,7 @@ fn train_new_model(perf_monitor: &mut PerformanceMonitor, freeze_attn: bool) -> 
         .collect();
 
     perf_monitor.start("指令微调阶段");
-    let actual_epochs = llm.train_monitored(chat_training_examples, 500, 0.0003, 30, 4);
+    let actual_epochs = llm.train_monitored(chat_training_examples, 500, 0.0001, 30, 1);
     perf_monitor.stop("指令微调阶段");
 
     println!("✓ 指令微调完成，实际训练 {} epochs", actual_epochs);
@@ -495,8 +495,8 @@ fn continue_training_loaded_model(
         chat_training_examples,
         epochs,
         lr,
-        20, // patience (早停容忍20个epoch)
-        4,  // accumulation_steps
+        30, // patience (稳定配置：约30)
+        1,  // accumulation_steps（稳定优先）
     );
 
     perf_monitor.stop("继续训练");
