@@ -157,7 +157,10 @@ impl LayerNorm {
     /// ```
     pub fn normalize(&mut self, input: &Array2<f32>) -> Array2<f32> {
         // 步骤 1: 计算每个样本的均值和标准差
-        let mean = input.mean_axis(Axis(1)).unwrap().insert_axis(Axis(1)); // (seq_len, 1)
+        let Some(mean) = input.mean_axis(Axis(1)).map(|m| m.insert_axis(Axis(1))) else {
+            log::warn!("LayerNorm.normalize 收到空输入，直接返回");
+            return input.clone();
+        }; // (seq_len, 1)
         let std = input.std_axis(Axis(1), 0.0).insert_axis(Axis(1)); // (seq_len, 1)
 
         // 缓存值用于反向传播
@@ -183,9 +186,14 @@ impl Layer for LayerNorm {
     }
 
     fn backward(&mut self, grads: &Array2<f32>, lr: f32) -> Array2<f32> {
-        let input = self.cached_input.as_ref().unwrap();
-        let mean = self.cached_mean.as_ref().unwrap();
-        let std = self.cached_std.as_ref().unwrap();
+        let (Some(input), Some(mean), Some(std)) = (
+            self.cached_input.as_ref(),
+            self.cached_mean.as_ref(),
+            self.cached_std.as_ref(),
+        ) else {
+            log::warn!("LayerNorm.backward 在未执行 forward 的情况下被调用，直接传递梯度");
+            return grads.clone();
+        };
 
         let normalized = (input - mean) / (std + self.epsilon);
         let n_features = input.shape()[1] as f32;

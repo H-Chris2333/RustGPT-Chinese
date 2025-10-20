@@ -127,6 +127,14 @@ fn main() {
     println!("║          RustGPT-Chinese - 中文GPT模型训练系统            ║");
     println!("╚═══════════════════════════════════════════════════════════╝\n");
 
+    // 初始化日志系统
+    if let Err(e) = simple_logger::SimpleLogger::new()
+        .with_level(log::LevelFilter::Info)
+        .init()
+    {
+        eprintln!("日志初始化失败: {}", e);
+    }
+
     // 创建性能监控器
     let mut perf_monitor = PerformanceMonitor::new();
     perf_monitor.start("程序总执行时间");
@@ -170,10 +178,15 @@ fn main() {
         println!();
 
         print!("是否加载已有模型? (y/n): ");
-        std::io::stdout().flush().unwrap();
+        if let Err(e) = std::io::stdout().flush() {
+            log::warn!("刷新标准输出失败: {}", e);
+        }
 
         let mut choice = String::new();
-        std::io::stdin().read_line(&mut choice).unwrap();
+        if std::io::stdin().read_line(&mut choice).is_err() {
+            log::warn!("读取输入失败，默认不加载已有模型");
+            choice.clear();
+        }
 
         if choice.trim().eq_ignore_ascii_case("y") {
             // 选择加载哪个模型
@@ -182,10 +195,15 @@ fn main() {
                     "\n选择要加载的模型:\n   1) {} (最终模型)\n   2) {} (预训练checkpoint)\n请选择 (1/2): ",
                     model_path, pretrain_checkpoint
                 );
-                std::io::stdout().flush().unwrap();
+                if let Err(e) = std::io::stdout().flush() {
+                    log::warn!("刷新标准输出失败: {}", e);
+                }
 
                 let mut model_choice = String::new();
-                std::io::stdin().read_line(&mut model_choice).unwrap();
+                if std::io::stdin().read_line(&mut model_choice).is_err() {
+                    log::warn!("读取模型选择失败，默认选择最终模型");
+                    model_choice.clear();
+                }
 
                 if model_choice.trim() == "2" && std::path::Path::new(pretrain_checkpoint).exists()
                 {
@@ -212,10 +230,15 @@ fn main() {
 
                     // 询问是否继续训练
                     print!("\n是否继续训练此模型? (y/n): ");
-                    std::io::stdout().flush().unwrap();
+                    if let Err(e) = std::io::stdout().flush() {
+                        log::warn!("刷新标准输出失败: {}", e);
+                    }
 
                     let mut train_choice = String::new();
-                    std::io::stdin().read_line(&mut train_choice).unwrap();
+                    if std::io::stdin().read_line(&mut train_choice).is_err() {
+                        log::warn!("读取输入失败，默认不继续训练");
+                        train_choice.clear();
+                    }
 
                     if train_choice.trim().eq_ignore_ascii_case("y") {
                         continue_training_loaded_model(loaded_llm, &mut perf_monitor, freeze_attn)
@@ -252,10 +275,15 @@ fn main() {
     println!("╚═══════════════════════════════════════════════════════════╝\n");
 
     print!("是否保存当前模型? (y/n): ");
-    std::io::stdout().flush().unwrap();
+    if let Err(e) = std::io::stdout().flush() {
+        log::warn!("刷新标准输出失败: {}", e);
+    }
 
     let mut save_choice = String::new();
-    std::io::stdin().read_line(&mut save_choice).unwrap();
+    if std::io::stdin().read_line(&mut save_choice).is_err() {
+        log::warn!("读取输入失败，默认不保存");
+        save_choice.clear();
+    }
 
     if save_choice.trim().eq_ignore_ascii_case("y") {
         save_model_interactive(&llm);
@@ -404,10 +432,15 @@ fn train_new_model(perf_monitor: &mut PerformanceMonitor, freeze_attn: bool) -> 
 
     // 询问是否保存预训练checkpoint
     print!("\n💾 是否保存预训练checkpoint? (y/n): ");
-    std::io::stdout().flush().unwrap();
+    if let Err(e) = std::io::stdout().flush() {
+        log::warn!("刷新标准输出失败: {}", e);
+    }
 
     let mut checkpoint_choice = String::new();
-    std::io::stdin().read_line(&mut checkpoint_choice).unwrap();
+    if std::io::stdin().read_line(&mut checkpoint_choice).is_err() {
+        log::warn!("读取输入失败，将跳过checkpoint保存");
+        checkpoint_choice.clear();
+    }
 
     if checkpoint_choice.trim().eq_ignore_ascii_case("y") {
         std::fs::create_dir_all("checkpoints").ok();
@@ -462,15 +495,25 @@ fn continue_training_loaded_model(
 
     // 询问训练参数
     print!("\n训练轮数 (默认50): ");
-    std::io::stdout().flush().unwrap();
+    if let Err(e) = std::io::stdout().flush() {
+        log::warn!("刷新标准输出失败: {}", e);
+    }
     let mut epochs_input = String::new();
-    std::io::stdin().read_line(&mut epochs_input).unwrap();
+    if std::io::stdin().read_line(&mut epochs_input).is_err() {
+        log::warn!("读取训练轮数失败，使用默认值 50");
+        epochs_input.clear();
+    }
     let epochs: usize = epochs_input.trim().parse().unwrap_or(50);
 
     print!("学习率 (默认0.0001): ");
-    std::io::stdout().flush().unwrap();
+    if let Err(e) = std::io::stdout().flush() {
+        log::warn!("刷新标准输出失败: {}", e);
+    }
     let mut lr_input = String::new();
-    std::io::stdin().read_line(&mut lr_input).unwrap();
+    if std::io::stdin().read_line(&mut lr_input).is_err() {
+        log::warn!("读取学习率失败，使用默认值 0.0001");
+        lr_input.clear();
+    }
     let lr: f32 = lr_input.trim().parse().unwrap_or(0.0001);
 
     println!("\n开始继续训练 ({} epochs, lr={})...\n", epochs, lr);
@@ -514,10 +557,15 @@ fn save_model_interactive(llm: &LLM) {
     println!("   3) 两种格式都保存");
 
     print!("\n请选择 (1/2/3): ");
-    std::io::stdout().flush().unwrap();
+    if let Err(e) = std::io::stdout().flush() {
+        log::warn!("刷新标准输出失败: {}", e);
+    }
 
     let mut format_choice = String::new();
-    std::io::stdin().read_line(&mut format_choice).unwrap();
+    if std::io::stdin().read_line(&mut format_choice).is_err() {
+        log::warn!("读取输入失败，默认跳过保存");
+        format_choice.clear();
+    }
 
     std::fs::create_dir_all("checkpoints").ok();
     std::fs::create_dir_all("exports").ok();
@@ -525,10 +573,15 @@ fn save_model_interactive(llm: &LLM) {
     match format_choice.trim() {
         "1" => {
             print!("文件名 (默认: checkpoints/model_final.bin): ");
-            std::io::stdout().flush().unwrap();
+            if let Err(e) = std::io::stdout().flush() {
+                log::warn!("刷新标准输出失败: {}", e);
+            }
 
             let mut filename = String::new();
-            std::io::stdin().read_line(&mut filename).unwrap();
+            if std::io::stdin().read_line(&mut filename).is_err() {
+                log::warn!("读取文件名失败，使用默认路径");
+                filename.clear();
+            }
             let path = if filename.trim().is_empty() {
                 "checkpoints/model_final.bin"
             } else {
@@ -542,10 +595,15 @@ fn save_model_interactive(llm: &LLM) {
         }
         "2" => {
             print!("文件名 (默认: exports/model_final.json): ");
-            std::io::stdout().flush().unwrap();
+            if let Err(e) = std::io::stdout().flush() {
+                log::warn!("刷新标准输出失败: {}", e);
+            }
 
             let mut filename = String::new();
-            std::io::stdin().read_line(&mut filename).unwrap();
+            if std::io::stdin().read_line(&mut filename).is_err() {
+                log::warn!("读取文件名失败，使用默认路径");
+                filename.clear();
+            }
             let path = if filename.trim().is_empty() {
                 "exports/model_final.json"
             } else {
@@ -593,11 +651,14 @@ fn interactive_mode(llm: &mut LLM) {
         input.clear();
 
         print!("👤 用户: ");
-        std::io::stdout().flush().unwrap();
+        if let Err(e) = std::io::stdout().flush() {
+            log::warn!("刷新标准输出失败: {}", e);
+        }
 
-        std::io::stdin()
-            .read_line(&mut input)
-            .expect("Failed to read input");
+        if std::io::stdin().read_line(&mut input).is_err() {
+            log::warn!("读取输入失败，已跳过本次交互");
+            continue;
+        }
 
         let trimmed_input = input.trim();
 
@@ -621,7 +682,9 @@ fn interactive_mode(llm: &mut LLM) {
 
         let formatted_input = format!("用户：{}", trimmed_input);
         print!("🤖 模型: ");
-        std::io::stdout().flush().unwrap();
+        if let Err(e) = std::io::stdout().flush() {
+            log::warn!("刷新标准输出失败: {}", e);
+        }
 
         let prediction = llm.predict_with_context(&formatted_input, 0.8, 0.9, 5);
         println!("{}\n", prediction);

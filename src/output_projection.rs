@@ -77,10 +77,17 @@ impl OutputProjection {
         let mut rng = rand::rng();
         // He 初始化：std = sqrt(2 / fan_in)
         let std = (2.0 / embedding_dim as f32).sqrt();
-        let normal = Normal::new(0.0, std).unwrap();
+        let normal_ok = Normal::new(0.0, std).ok();
+
+        let w_out = if let Some(normal) = normal_ok {
+            Array2::from_shape_fn((embedding_dim, vocab_size), |_| normal.sample(&mut rng))
+        } else {
+            log::warn!("OutputProjection: 正态分布初始化失败，W_out改用均匀分布");
+            Array2::from_shape_fn((embedding_dim, vocab_size), |_| rng.random_range(-std..std))
+        };
 
         OutputProjection {
-            w_out: Array2::from_shape_fn((embedding_dim, vocab_size), |_| normal.sample(&mut rng)),
+            w_out,
             b_out: Array2::zeros((1, vocab_size)),
             optimizer: Adam::new((embedding_dim, vocab_size)),
             cached_input: None,
@@ -137,13 +144,18 @@ impl Layer for OutputProjection {
     ///   grad_input = grads · W^T
     /// ```
     fn backward(&mut self, grads: &Array2<f32>, lr: f32) -> Array2<f32> {
-        let input = self.cached_input.as_ref().unwrap();
+        let Some(input) = self.cached_input.as_ref() else {
+            log::warn!("OutputProjection.backward 在未执行 forward 的情况下被调用，直接传递梯度");
+            return grads.clone();
+        };
 
         // 计算权重梯度: grad_W = input^T · grads
         let grad_w_out = input.t().dot(grads);
 
         // 计算偏置梯度: grad_b = mean(grads)
-        let grad_b_out = grads.mean_axis(Axis(0)).unwrap();
+        let grad_b_out = grads
+            .mean_axis(Axis(0))
+            .unwrap_or_else(|| Array2::zeros((1, grads.shape()[1])));
 
         // 计算输入梯度: grad_input = grads · W^T
         let grad_input = grads.dot(&self.w_out.t());

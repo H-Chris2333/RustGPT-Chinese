@@ -126,8 +126,12 @@ impl Embeddings {
     /// - 0.02 是经验值，在多数情况下效果良好
     fn init_embeddings(vocab_size: usize, embedding_dim: usize) -> Array2<f32> {
         let mut rng = rand::rng();
-        let normal = Normal::new(0.0, 0.02).unwrap();
-        Array2::from_shape_fn((vocab_size, embedding_dim), |_| normal.sample(&mut rng))
+        if let Ok(normal) = Normal::new(0.0, 0.02) {
+            Array2::from_shape_fn((vocab_size, embedding_dim), |_| normal.sample(&mut rng))
+        } else {
+            log::warn!("正态分布初始化失败，改用均匀分布初始化嵌入权重");
+            Array2::from_shape_fn((vocab_size, embedding_dim), |_| rng.random_range(-0.02..0.02))
+        }
     }
 
     /// **根据 token ID 获取对应的嵌入向量**
@@ -143,15 +147,18 @@ impl Embeddings {
     fn get_token_embeddings(embeddings: &Array2<f32>, token_ids: &[usize]) -> Array2<f32> {
         let mut token_embeds = Array2::<f32>::zeros((token_ids.len(), embeddings.ncols()));
         for (i, &token_id) in token_ids.iter().enumerate() {
-            if token_id >= embeddings.nrows() {
-                panic!(
-                    "Token ID {} out of bounds for vocab size {}",
+            let safe_id = if token_id >= embeddings.nrows() {
+                log::warn!(
+                    "Token ID {} 越界（词表大小: {}），将使用最后一个可用ID作为回退",
                     token_id,
                     embeddings.nrows()
                 );
-            }
-            // 复制嵌入矩阵的第 token_id 行到输出的第 i 行
-            token_embeds.row_mut(i).assign(&embeddings.row(token_id));
+                embeddings.nrows().saturating_sub(1)
+            } else {
+                token_id
+            };
+            // 复制嵌入矩阵的第 safe_id 行到输出的第 i 行
+            token_embeds.row_mut(i).assign(&embeddings.row(safe_id));
         }
         token_embeds
     }
@@ -258,7 +265,10 @@ impl Layer for Embeddings {
     /// ```
     fn backward(&mut self, grads: &Array2<f32>, lr: f32) -> Array2<f32> {
         // 获取缓存的输入 token ID
-        let input = self.cached_input.as_ref().unwrap();
+        let Some(input) = self.cached_input.as_ref() else {
+            log::warn!("Embeddings.backward 在未执行 forward 的情况下被调用，跳过参数更新");
+            return grads.clone();
+        };
         let token_ids: Vec<usize> = input.iter().map(|&x| x as usize).collect();
         let grads = grads.view(); // (sequence_length, embedding_dim)
 
@@ -267,19 +277,22 @@ impl Layer for Embeddings {
 
         // 累积每个 token 的梯度
         for (i, &token_id) in token_ids.iter().enumerate() {
-            if token_id >= self.token_embeddings.nrows() {
-                panic!(
-                    "Token ID {} out of bounds for vocab size {}",
+            let safe_id = if token_id >= self.token_embeddings.nrows() {
+                log::warn!(
+                    "Token ID {} 越界（词表大小: {}），将使用最后一个可用ID作为回退",
                     token_id,
                     self.token_embeddings.nrows()
                 );
-            }
+                self.token_embeddings.nrows().saturating_sub(1)
+            } else {
+                token_id
+            };
             let grad_row = grads.row(i);
 
             // 累积到对应 token 的梯度行
             // 如果一个 token 在序列中出现多次，梯度会累加
             {
-                let mut token_row = token_grads.row_mut(token_id);
+                let mut token_row = token_grads.row_mut(safe_id);
                 token_row += &grad_row;
             }
         }
