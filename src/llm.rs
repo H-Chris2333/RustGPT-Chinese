@@ -402,6 +402,78 @@ impl LLM {
         self.set_training_mode(false);
     }
 
+    /// 使用预tokenize的数据进行训练（性能优化版本）
+    ///
+    /// 这个方法接受已经tokenize的数据，避免重复tokenization
+    pub fn train_with_cached_tokens(
+        &mut self,
+        tokenized_data: Vec<Vec<usize>>,
+        epochs: usize,
+        initial_lr: f32,
+    ) {
+        self.set_training_mode(true);
+
+        for epoch in 0..epochs {
+            let decay_rate: f32 = 0.95;
+            let decay_steps = 10.0;
+            let current_lr = initial_lr * decay_rate.powf(epoch as f32 / decay_steps);
+
+            let mut total_loss = 0.0;
+            let mut sample_count = 0;
+
+            // 直接使用缓存的tokenized数据，无需重复tokenize
+            for training_row in &tokenized_data {
+                if training_row.len() < 2 {
+                    continue;
+                }
+
+                let input_ids = &training_row[..training_row.len() - 1];
+                let target_ids = &training_row[1..];
+
+                // 前向传播
+                let mut input: Array2<f32> = Array2::zeros((1, input_ids.len()));
+                input
+                    .row_mut(0)
+                    .assign(&input_ids.iter().map(|&x| x as f32).collect::<Array1<f32>>());
+
+                for layer in &mut self.network {
+                    input = layer.forward(&input);
+                }
+
+                let logits = input;
+                // 使用 log_softmax + NLL 提升数值稳定性
+                let log_probs = log_softmax(&logits);
+                total_loss += Self::cross_entropy_from_log_probs(&log_probs, target_ids);
+
+                // 反向传播：grad = softmax(logits) - one_hot
+                let probs = log_probs.mapv(|x| x.exp());
+                let mut grads_output = Self::compute_gradients_step(&probs, target_ids);
+
+                // 更强的梯度裁剪提升稳定性
+                Self::clip_gradients(&mut grads_output, 1.0);
+
+                for layer in self.network.iter_mut().rev() {
+                    grads_output = layer.backward(&grads_output, current_lr);
+                }
+
+                sample_count += 1;
+            }
+
+            println!(
+                "Epoch {}: Loss = {:.4}, LR = {:.6}",
+                epoch,
+                if sample_count > 0 {
+                    total_loss / sample_count as f32
+                } else {
+                    0.0
+                },
+                current_lr
+            );
+        }
+
+        self.set_training_mode(false);
+    }
+
     // ═════════════════════════════════════════════════════════════════════════════
     // 🚀 阶段1训练优化 - 性能优化方法
     // ═════════════════════════════════════════════════════════════════════════════
