@@ -309,6 +309,8 @@ No PyTorch, TensorFlow, or Candle - just pure Rust and linear algebra!
 ## 📚 Documentation
 
 - **[CLAUDE.md](CLAUDE.md)** - Development guidelines for Claude Code assistant
+- **[训练性能优化完全指南](docs/训练性能优化指南.md)** - Comprehensive training performance optimization guide (CN)
+- **[训练稳定化与后续改进路线](docs/训练稳定化与后续改进路线.md)** - Training stabilization plan and next steps (CN)
 
 ## 🤝 Contributing
 
@@ -331,8 +333,8 @@ Contributions are welcome! This project is perfect for learning and experimentat
 - ✅ **Explicit residual connections** - Clear and maintainable
 - ✅ **Performance optimized** - 60-80% faster than initial version
 - ⚠️ **No attention masking parameter** - Currently hardcoded causal masking
-- ⚠️ **No gradient accumulation** - One sample per update
-- ⚠️ **No learning rate warmup** - Only exponential decay
+- ✅ **Gradient accumulation** - Configurable via accumulation steps (default disabled for stability)
+- ⚠️ **No learning rate warmup** - Cosine annealing used, but no warmup phase
 
 ### Getting Started
 1. Fork the repository
