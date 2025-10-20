@@ -20,7 +20,8 @@ fn test_vocab_encode_decode() {
 fn test_vocab_default() {
     let vocab = Vocab::default();
 
-    // Test that default vocab contains expected words - they should be at higher indices due to special tokens
+    // Test that default vocab contains expected words - they should be at higher indices due to
+    // special tokens
     assert!(vocab.encode("hello").is_some());
     assert!(vocab.encode("world").is_some());
     assert!(vocab.encode("</s>").is_some()); // This is a special token at index 3

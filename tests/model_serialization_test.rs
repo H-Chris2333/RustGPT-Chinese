@@ -1,7 +1,8 @@
 // 模型序列化测试
 
-use llm::{LLM, load_model_binary, load_model_json, save_model_binary, save_model_json};
 use std::fs;
+
+use llm::{LLM, load_model_binary, load_model_json, save_model_binary, save_model_json};
 
 #[test]
 fn test_binary_save_and_load() {
@@ -69,8 +70,7 @@ fn test_json_save_and_load() {
 
 #[test]
 fn test_model_state_preservation() {
-    use llm::adam::Adam;
-    use llm::model_serialization::SerializableAdam;
+    use llm::{adam::Adam, model_serialization::SerializableAdam};
 
     // 测试Adam优化器状态保存
     let adam = Adam::new((10, 20));

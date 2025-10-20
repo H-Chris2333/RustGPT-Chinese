@@ -9,6 +9,119 @@ use llm::{
 
 // 🔥 导入训练性能优化模块
 
+// CLI 解析辅助函数
+fn arg_has_flag(args: &[String], flag: &str) -> bool {
+    args.iter().any(|a| a == flag)
+}
+
+fn parse_usize_arg(args: &[String], key: &str) -> Option<usize> {
+    let prefix = format!("{}=", key);
+    for a in args {
+        if a.starts_with(&prefix) {
+            if let Ok(v) = a[prefix.len()..].parse::<usize>() {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
+fn parse_f32_arg(args: &[String], key: &str) -> Option<f32> {
+    let prefix = format!("{}=", key);
+    for a in args {
+        if a.starts_with(&prefix) {
+            if let Ok(v) = a[prefix.len()..].parse::<f32>() {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
+// 快速预训练入口（非交互短跑）
+fn run_quick(
+    perf_monitor: &mut PerformanceMonitor,
+    freeze_attn: bool,
+    pretrain_epochs: usize,
+    lr: f32,
+    patience: usize,
+    accum: usize,
+) {
+    println!("\n⚡ 启动快速预训练 (--quick) 模式");
+
+    perf_monitor.start("加载训练数据");
+    let dataset = Dataset::new(
+        String::from("data/pretraining_data.json"),
+        String::from("data/chat_training_data.json"),
+        DatasetType::JSON,
+    );
+    perf_monitor.stop("加载训练数据");
+
+    // 构建词汇表
+    let mut vocab_set = std::collections::HashSet::new();
+
+    perf_monitor.start("构建词汇表 - 预训练数据");
+    Vocab::process_text_for_vocab(&dataset.pretraining_data, &mut vocab_set);
+    perf_monitor.stop("构建词汇表 - 预训练数据");
+
+    perf_monitor.start("构建词汇表 - 对话数据");
+    Vocab::process_text_for_vocab(&dataset.chat_training_data, &mut vocab_set);
+    perf_monitor.stop("构建词汇表 - 对话数据");
+
+    perf_monitor.start("创建词汇表对象");
+    let mut vocab_words: Vec<String> = vocab_set.into_iter().collect();
+    vocab_words.sort();
+    let vocab_words_refs: Vec<&str> = vocab_words.iter().map(|s| s.as_str()).collect();
+    let vocab = Vocab::new(vocab_words_refs);
+    perf_monitor.stop("创建词汇表对象");
+
+    // 初始化模型
+    perf_monitor.start("初始化神经网络");
+    let transformer_block_1 = TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM);
+    let transformer_block_2 = TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM);
+    let output_projection = OutputProjection::new(EMBEDDING_DIM, vocab.words.len());
+    let embeddings = Embeddings::new(vocab.clone());
+
+    let mut llm = LLM::new(
+        vocab,
+        vec![
+            Box::new(embeddings),
+            Box::new(transformer_block_1),
+            Box::new(transformer_block_2),
+            Box::new(output_projection),
+        ],
+    );
+    perf_monitor.stop("初始化神经网络");
+
+    // 可选冻结注意力参数更新
+    if freeze_attn {
+        llm.set_attention_freeze_updates(true);
+        println!("🔒 注意力层参数更新已冻结 (--freeze-attn)");
+    }
+
+    // 预训练
+    println!(
+        "\n[Quick] 预训练: epochs={}, lr={:.6}, patience={}, accum={} (cosine, 无重启, clip=1.0)",
+        pretrain_epochs, lr, patience, accum
+    );
+
+    let pretraining_examples: Vec<&str> = dataset
+        .pretraining_data
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+
+    perf_monitor.start("预训练阶段");
+    let actual_epochs =
+        llm.train_monitored(pretraining_examples, pretrain_epochs, lr, patience, accum);
+    perf_monitor.stop("预训练阶段");
+
+    println!("✓ 快速预训练完成，实际训练 {} epochs", actual_epochs);
+
+    perf_monitor.stop("程序总执行时间");
+    perf_monitor.print_report();
+}
+
 fn main() {
     println!("\n╔═══════════════════════════════════════════════════════════╗");
     println!("║          RustGPT-Chinese - 中文GPT模型训练系统            ║");
@@ -17,6 +130,28 @@ fn main() {
     // 创建性能监控器
     let mut perf_monitor = PerformanceMonitor::new();
     perf_monitor.start("程序总执行时间");
+
+    // 解析命令行参数
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let freeze_attn = arg_has_flag(&args, "--freeze-attn");
+    let no_interactive = arg_has_flag(&args, "--no-interactive");
+
+    // 快速预训练入口：仅运行预训练，适合自动化验证
+    if arg_has_flag(&args, "--quick") {
+        let pretrain_epochs = parse_usize_arg(&args, "--pretrain-epochs").unwrap_or(30);
+        let lr = parse_f32_arg(&args, "--lr").unwrap_or(0.0001);
+        let patience = parse_usize_arg(&args, "--patience").unwrap_or(10);
+        let accum = parse_usize_arg(&args, "--accum").unwrap_or(1);
+        run_quick(
+            &mut perf_monitor,
+            freeze_attn,
+            pretrain_epochs,
+            lr,
+            patience,
+            accum,
+        );
+        return;
+    }
 
     // 检查是否存在已保存的模型
     let model_path = "checkpoints/model_final.bin";
@@ -83,7 +218,7 @@ fn main() {
                     std::io::stdin().read_line(&mut train_choice).unwrap();
 
                     if train_choice.trim().eq_ignore_ascii_case("y") {
-                        continue_training_loaded_model(loaded_llm, &mut perf_monitor)
+                        continue_training_loaded_model(loaded_llm, &mut perf_monitor, freeze_attn)
                     } else {
                         println!("\n✓ 跳过训练，直接进入交互模式");
                         loaded_llm
@@ -92,17 +227,24 @@ fn main() {
                 Err(e) => {
                     println!("\n❌ 加载模型失败: {}", e);
                     println!("将重新训练模型...\n");
-                    train_new_model(&mut perf_monitor)
+                    train_new_model(&mut perf_monitor, freeze_attn)
                 }
             }
         } else {
             println!("\n🔄 将训练新模型...\n");
-            train_new_model(&mut perf_monitor)
+            train_new_model(&mut perf_monitor, freeze_attn)
         }
     } else {
         println!("📝 未检测到已保存的模型，将开始训练新模型...\n");
-        train_new_model(&mut perf_monitor)
+        train_new_model(&mut perf_monitor, freeze_attn)
     };
+
+    // 训练完成后，如指定 --no-interactive 则直接退出
+    if no_interactive {
+        perf_monitor.stop("程序总执行时间");
+        perf_monitor.print_report();
+        return;
+    }
 
     // 训练完成后询问是否保存
     println!("\n╔═══════════════════════════════════════════════════════════╗");
@@ -149,7 +291,7 @@ fn main() {
 }
 
 /// 训练新模型（使用性能优化）
-fn train_new_model(perf_monitor: &mut PerformanceMonitor) -> LLM {
+fn train_new_model(perf_monitor: &mut PerformanceMonitor, freeze_attn: bool) -> LLM {
     perf_monitor.start("加载训练数据");
     let dataset = Dataset::new(
         String::from("data/pretraining_data.json"),
@@ -201,6 +343,12 @@ fn train_new_model(perf_monitor: &mut PerformanceMonitor) -> LLM {
 
     perf_monitor.stop("初始化神经网络");
 
+    // 可选冻结注意力参数更新
+    if freeze_attn {
+        llm.set_attention_freeze_updates(true);
+        println!("🔒 注意力层参数更新已冻结 (--freeze-attn)");
+    }
+
     println!("\n╔═══════════════════════════════════════════════════════════╗");
     println!("║                      模型信息                             ║");
     println!("╚═══════════════════════════════════════════════════════════╝");
@@ -245,10 +393,10 @@ fn train_new_model(perf_monitor: &mut PerformanceMonitor) -> LLM {
     perf_monitor.start("预训练阶段");
     let actual_epochs = llm.train_monitored(
         pretraining_examples,
-        500,   // max_epochs
+        500,    // max_epochs
         0.0001, // initial_lr（更低学习率提升稳定性）
-        30,    // patience（小数据集快速迭代）
-        1,     // accumulation_steps（暂时禁用累积）
+        30,     // patience（小数据集快速迭代）
+        1,      // accumulation_steps（暂时禁用累积）
     );
     perf_monitor.stop("预训练阶段");
 
@@ -296,7 +444,11 @@ fn train_new_model(perf_monitor: &mut PerformanceMonitor) -> LLM {
 }
 
 /// 继续训练已加载的模型
-fn continue_training_loaded_model(mut llm: LLM, perf_monitor: &mut PerformanceMonitor) -> LLM {
+fn continue_training_loaded_model(
+    mut llm: LLM,
+    perf_monitor: &mut PerformanceMonitor,
+    freeze_attn: bool,
+) -> LLM {
     println!("\n🔄 继续训练模式");
 
     // 加载数据
@@ -328,6 +480,12 @@ fn continue_training_loaded_model(mut llm: LLM, perf_monitor: &mut PerformanceMo
         .iter()
         .map(|s| s.as_str())
         .collect();
+
+    // 可选冻结注意力参数更新
+    if freeze_attn {
+        llm.set_attention_freeze_updates(true);
+        println!("🔒 注意力层参数更新已冻结 (--freeze-attn)");
+    }
 
     llm.set_training_mode(true);
     perf_monitor.start("继续训练");

@@ -401,7 +401,7 @@ impl Vocab {
     ///
     /// # 示例
     /// ```rust
-    /// let id = vocab.encode_with_unk("火星文词汇");  // 返回 1 (<|unk|>)
+    /// let id = vocab.encode_with_unk("火星文词汇"); // 返回 1 (<|unk|>)
     /// ```
     pub fn encode_with_unk(&self, word: &str) -> usize {
         match self.encode(word) {
