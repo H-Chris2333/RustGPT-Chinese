@@ -37,6 +37,7 @@
 //! - 这种设计有助于模型学习抽象的、压缩的特征表示
 
 use ndarray::{Array2, Axis};
+use rand::Rng;
 use rand_distr::{Distribution, Normal};
 
 use crate::{adam::Adam, llm::Layer};
@@ -118,13 +119,17 @@ impl FeedForward {
             Array2::from_shape_fn((embedding_dim, hidden_dim), |_| normal.sample(&mut rng))
         } else {
             log::warn!("FeedForward: 正态分布初始化失败，W1改用均匀分布");
-            Array2::from_shape_fn((embedding_dim, hidden_dim), |_| rng.random_range(-std_w1..std_w1))
+            Array2::from_shape_fn((embedding_dim, hidden_dim), |_| {
+                rng.random_range(-std_w1..std_w1)
+            })
         };
         let w2 = if let Some(normal) = normal_w2 {
             Array2::from_shape_fn((hidden_dim, embedding_dim), |_| normal.sample(&mut rng))
         } else {
             log::warn!("FeedForward: 正态分布初始化失败，W2改用均匀分布");
-            Array2::from_shape_fn((hidden_dim, embedding_dim), |_| rng.random_range(-std_w2..std_w2))
+            Array2::from_shape_fn((hidden_dim, embedding_dim), |_| {
+                rng.random_range(-std_w2..std_w2)
+            })
         };
 
         FeedForward {

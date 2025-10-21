@@ -72,10 +72,20 @@ impl SerializableAdam {
     }
 
     pub fn to_adam(&self) -> Adam {
-        let m = Array2::from_shape_vec(self.m_shape, self.m_data.clone())
-            .expect("Failed to reconstruct m matrix");
-        let v = Array2::from_shape_vec(self.v_shape, self.v_data.clone())
-            .expect("Failed to reconstruct v matrix");
+        let m = match Array2::from_shape_vec(self.m_shape, self.m_data.clone()) {
+            Ok(arr) => arr,
+            Err(e) => {
+                log::error!("Failed to reconstruct m matrix: {}", e);
+                Array2::zeros(self.m_shape)
+            }
+        };
+        let v = match Array2::from_shape_vec(self.v_shape, self.v_data.clone()) {
+            Ok(arr) => arr,
+            Err(e) => {
+                log::error!("Failed to reconstruct v matrix: {}", e);
+                Array2::zeros(self.v_shape)
+            }
+        };
 
         Adam {
             beta1: self.beta1,
@@ -230,8 +240,14 @@ impl SerializableLayer {
 
     fn deserialize_embeddings(s: &SerializableEmbeddings) -> Embeddings {
         let token_embeddings =
-            Array2::from_shape_vec(s.token_embeddings_shape, s.token_embeddings_data.clone())
-                .expect("Failed to reconstruct token_embeddings");
+            match Array2::from_shape_vec(s.token_embeddings_shape, s.token_embeddings_data.clone())
+            {
+                Ok(arr) => arr,
+                Err(e) => {
+                    log::error!("Failed to reconstruct token_embeddings: {}", e);
+                    Array2::zeros(s.token_embeddings_shape)
+                }
+            };
 
         Embeddings {
             token_embeddings,
@@ -266,14 +282,34 @@ impl SerializableLayer {
     }
 
     fn deserialize_self_attention(s: &SerializableSelfAttention) -> SelfAttention {
-        let w_q = Array2::from_shape_vec(s.w_q_shape, s.w_q_data.clone())
-            .expect("Failed to reconstruct w_q");
-        let w_k = Array2::from_shape_vec(s.w_k_shape, s.w_k_data.clone())
-            .expect("Failed to reconstruct w_k");
-        let w_v = Array2::from_shape_vec(s.w_v_shape, s.w_v_data.clone())
-            .expect("Failed to reconstruct w_v");
-        let w_o = Array2::from_shape_vec(s.w_o_shape, s.w_o_data.clone())
-            .expect("Failed to reconstruct w_o");
+        let w_q = match Array2::from_shape_vec(s.w_q_shape, s.w_q_data.clone()) {
+            Ok(arr) => arr,
+            Err(e) => {
+                log::error!("Failed to reconstruct w_q: {}", e);
+                Array2::zeros(s.w_q_shape)
+            }
+        };
+        let w_k = match Array2::from_shape_vec(s.w_k_shape, s.w_k_data.clone()) {
+            Ok(arr) => arr,
+            Err(e) => {
+                log::error!("Failed to reconstruct w_k: {}", e);
+                Array2::zeros(s.w_k_shape)
+            }
+        };
+        let w_v = match Array2::from_shape_vec(s.w_v_shape, s.w_v_data.clone()) {
+            Ok(arr) => arr,
+            Err(e) => {
+                log::error!("Failed to reconstruct w_v: {}", e);
+                Array2::zeros(s.w_v_shape)
+            }
+        };
+        let w_o = match Array2::from_shape_vec(s.w_o_shape, s.w_o_data.clone()) {
+            Ok(arr) => arr,
+            Err(e) => {
+                log::error!("Failed to reconstruct w_o: {}", e);
+                Array2::zeros(s.w_o_shape)
+            }
+        };
 
         SelfAttention {
             embedding_dim: s.embedding_dim,
@@ -322,14 +358,34 @@ impl SerializableLayer {
     }
 
     fn deserialize_feed_forward(s: &SerializableFeedForward) -> FeedForward {
-        let w1 = Array2::from_shape_vec(s.w1_shape, s.w1_data.clone())
-            .expect("Failed to reconstruct w1");
-        let b1 = Array2::from_shape_vec(s.b1_shape, s.b1_data.clone())
-            .expect("Failed to reconstruct b1");
-        let w2 = Array2::from_shape_vec(s.w2_shape, s.w2_data.clone())
-            .expect("Failed to reconstruct w2");
-        let b2 = Array2::from_shape_vec(s.b2_shape, s.b2_data.clone())
-            .expect("Failed to reconstruct b2");
+        let w1 = match Array2::from_shape_vec(s.w1_shape, s.w1_data.clone()) {
+            Ok(arr) => arr,
+            Err(e) => {
+                log::error!("Failed to reconstruct w1: {}", e);
+                Array2::zeros(s.w1_shape)
+            }
+        };
+        let b1 = match Array2::from_shape_vec(s.b1_shape, s.b1_data.clone()) {
+            Ok(arr) => arr,
+            Err(e) => {
+                log::error!("Failed to reconstruct b1: {}", e);
+                Array2::zeros(s.b1_shape)
+            }
+        };
+        let w2 = match Array2::from_shape_vec(s.w2_shape, s.w2_data.clone()) {
+            Ok(arr) => arr,
+            Err(e) => {
+                log::error!("Failed to reconstruct w2: {}", e);
+                Array2::zeros(s.w2_shape)
+            }
+        };
+        let b2 = match Array2::from_shape_vec(s.b2_shape, s.b2_data.clone()) {
+            Ok(arr) => arr,
+            Err(e) => {
+                log::error!("Failed to reconstruct b2: {}", e);
+                Array2::zeros(s.b2_shape)
+            }
+        };
 
         FeedForward {
             w1,
@@ -363,10 +419,20 @@ impl SerializableLayer {
     }
 
     fn deserialize_layer_norm(s: &SerializableLayerNorm) -> LayerNorm {
-        let gamma = Array2::from_shape_vec(s.gamma_shape, s.gamma_data.clone())
-            .expect("Failed to reconstruct gamma");
-        let beta = Array2::from_shape_vec(s.beta_shape, s.beta_data.clone())
-            .expect("Failed to reconstruct beta");
+        let gamma = match Array2::from_shape_vec(s.gamma_shape, s.gamma_data.clone()) {
+            Ok(arr) => arr,
+            Err(e) => {
+                log::error!("Failed to reconstruct gamma: {}", e);
+                Array2::zeros(s.gamma_shape)
+            }
+        };
+        let beta = match Array2::from_shape_vec(s.beta_shape, s.beta_data.clone()) {
+            Ok(arr) => arr,
+            Err(e) => {
+                log::error!("Failed to reconstruct beta: {}", e);
+                Array2::zeros(s.beta_shape)
+            }
+        };
 
         LayerNorm {
             epsilon: s.epsilon,
@@ -404,10 +470,20 @@ impl SerializableLayer {
         s: &SerializableOutputProjection,
         _vocab_size: usize,
     ) -> OutputProjection {
-        let w_out = Array2::from_shape_vec(s.w_out_shape, s.w_out_data.clone())
-            .expect("Failed to reconstruct w_out");
-        let b_out = Array2::from_shape_vec(s.b_out_shape, s.b_out_data.clone())
-            .expect("Failed to reconstruct b_out");
+        let w_out = match Array2::from_shape_vec(s.w_out_shape, s.w_out_data.clone()) {
+            Ok(arr) => arr,
+            Err(e) => {
+                log::error!("Failed to reconstruct w_out: {}", e);
+                Array2::zeros(s.w_out_shape)
+            }
+        };
+        let b_out = match Array2::from_shape_vec(s.b_out_shape, s.b_out_data.clone()) {
+            Ok(arr) => arr,
+            Err(e) => {
+                log::error!("Failed to reconstruct b_out: {}", e);
+                Array2::zeros(s.b_out_shape)
+            }
+        };
 
         OutputProjection {
             w_out,

@@ -34,6 +34,7 @@
 //! - **本项目**: 未实现权重共享（教育目的，保持独立性）
 
 use ndarray::{Array2, Axis};
+use rand::Rng;
 use rand_distr::{Distribution, Normal};
 
 use crate::{adam::Adam, llm::Layer};
@@ -155,7 +156,7 @@ impl Layer for OutputProjection {
         // 计算偏置梯度: grad_b = mean(grads)
         let grad_b_out = grads
             .mean_axis(Axis(0))
-            .unwrap_or_else(|| Array2::zeros((1, grads.shape()[1])));
+            .unwrap_or_else(|| ndarray::Array1::zeros(grads.shape()[1]));
 
         // 计算输入梯度: grad_input = grads · W^T
         let grad_input = grads.dot(&self.w_out.t());

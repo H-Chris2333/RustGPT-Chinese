@@ -71,6 +71,7 @@
 use std::f32;
 
 use ndarray::{Array2, Axis, s};
+use rand::Rng;
 use rand_distr::{Distribution, Normal};
 
 use crate::utils::softmax;
@@ -192,7 +193,8 @@ impl SelfAttention {
         let (num_heads, head_dim) = if embedding_dim % num_heads != 0 {
             log::warn!(
                 "embedding_dim={} 不能被 num_heads={} 整除，回退为单头注意力",
-                embedding_dim, num_heads
+                embedding_dim,
+                num_heads
             );
             (1, embedding_dim)
         } else {
@@ -207,25 +209,33 @@ impl SelfAttention {
             Array2::from_shape_fn((embedding_dim, embedding_dim), |_| normal.sample(&mut rng))
         } else {
             log::warn!("SelfAttention: 正态分布初始化失败，W_q改用均匀分布");
-            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| rng.random_range(-std..std))
+            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| {
+                rng.random_range(-std..std)
+            })
         };
         let w_k = if let Some(normal) = normal_ok.clone() {
             Array2::from_shape_fn((embedding_dim, embedding_dim), |_| normal.sample(&mut rng))
         } else {
             log::warn!("SelfAttention: 正态分布初始化失败，W_k改用均匀分布");
-            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| rng.random_range(-std..std))
+            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| {
+                rng.random_range(-std..std)
+            })
         };
         let w_v = if let Some(normal) = normal_ok.clone() {
             Array2::from_shape_fn((embedding_dim, embedding_dim), |_| normal.sample(&mut rng))
         } else {
             log::warn!("SelfAttention: 正态分布初始化失败，W_v改用均匀分布");
-            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| rng.random_range(-std..std))
+            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| {
+                rng.random_range(-std..std)
+            })
         };
         let w_o = if let Some(normal) = normal_ok {
             Array2::from_shape_fn((embedding_dim, embedding_dim), |_| normal.sample(&mut rng))
         } else {
             log::warn!("SelfAttention: 正态分布初始化失败，W_o改用均匀分布");
-            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| rng.random_range(-std..std))
+            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| {
+                rng.random_range(-std..std)
+            })
         };
 
         SelfAttention {

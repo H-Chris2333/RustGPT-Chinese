@@ -47,6 +47,7 @@
 //! ```
 
 use ndarray::Array2;
+use rand::Rng;
 use rand_distr::{Distribution, Normal};
 
 use crate::{EMBEDDING_DIM, adam::Adam, llm::Layer, position_encoding::PositionEncoding, vocab::Vocab};
@@ -130,7 +131,9 @@ impl Embeddings {
             Array2::from_shape_fn((vocab_size, embedding_dim), |_| normal.sample(&mut rng))
         } else {
             log::warn!("正态分布初始化失败，改用均匀分布初始化嵌入权重");
-            Array2::from_shape_fn((vocab_size, embedding_dim), |_| rng.random_range(-0.02..0.02))
+            Array2::from_shape_fn((vocab_size, embedding_dim), |_| {
+                rng.random_range(-0.02..0.02)
+            })
         }
     }
 

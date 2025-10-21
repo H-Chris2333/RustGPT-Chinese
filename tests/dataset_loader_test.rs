@@ -29,12 +29,14 @@ fn test_dataset_new_csv() {
     // Prepare test CSV files with minimal data
     let pretraining_csv = "data/pretraining_data_test.csv";
     let chat_csv = "data/chat_training_data_test.csv";
-    std::fs::write(pretraining_csv, "The sun rises in the east and sets in the west </s>\nWater flows downhill due to gravity </s>").unwrap();
-    std::fs::write(
-        chat_csv,
-        "User: What causes rain?\nUser: How do mountains form?",
-    )
-    .unwrap();
+    assert!(std::fs::write(pretraining_csv, "The sun rises in the east and sets in the west </s>\nWater flows downhill due to gravity </s>").is_ok());
+    assert!(
+        std::fs::write(
+            chat_csv,
+            "User: What causes rain?\nUser: How do mountains form?",
+        )
+        .is_ok()
+    );
 
     let dataset = Dataset::new(
         pretraining_csv.to_string(),
@@ -56,6 +58,6 @@ fn test_dataset_new_csv() {
     );
 
     // Clean up test files
-    std::fs::remove_file(pretraining_csv).unwrap();
-    std::fs::remove_file(chat_csv).unwrap();
+    let _ = std::fs::remove_file(pretraining_csv);
+    let _ = std::fs::remove_file(chat_csv);
 }

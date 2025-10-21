@@ -7,7 +7,7 @@ use llm::{LLM, load_model_binary, load_model_json, save_model_binary, save_model
 #[test]
 fn test_binary_save_and_load() {
     // 创建测试目录
-    fs::create_dir_all("test_checkpoints").unwrap();
+    assert!(fs::create_dir_all("test_checkpoints").is_ok());
 
     // 创建模型
     let llm = LLM::default();
@@ -16,13 +16,22 @@ fn test_binary_save_and_load() {
 
     // 保存
     let path = "test_checkpoints/test_model.bin";
-    save_model_binary(&llm, path).expect("Failed to save model");
+    assert!(
+        save_model_binary(&llm, path).is_ok(),
+        "Failed to save model"
+    );
 
     // 确认文件存在
     assert!(std::path::Path::new(path).exists());
 
     // 加载
-    let loaded_llm = load_model_binary(path).expect("Failed to load model");
+    let loaded_llm = match load_model_binary(path) {
+        Ok(m) => m,
+        Err(e) => {
+            assert!(false, "Failed to load model: {}", e);
+            return;
+        }
+    };
 
     // 验证
     assert_eq!(loaded_llm.total_parameters(), original_params);
@@ -30,8 +39,8 @@ fn test_binary_save_and_load() {
     assert_eq!(loaded_llm.network.len(), llm.network.len());
 
     // 清理
-    fs::remove_file(path).unwrap();
-    fs::remove_dir("test_checkpoints").unwrap();
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_dir("test_checkpoints");
 
     println!("✓ 二进制格式保存/加载测试通过!");
 }
@@ -39,7 +48,7 @@ fn test_binary_save_and_load() {
 #[test]
 fn test_json_save_and_load() {
     // 创建测试目录
-    fs::create_dir_all("test_exports").unwrap();
+    assert!(fs::create_dir_all("test_exports").is_ok());
 
     // 创建模型
     let llm = LLM::default();
@@ -48,13 +57,19 @@ fn test_json_save_and_load() {
 
     // 保存
     let path = "test_exports/test_model.json";
-    save_model_json(&llm, path).expect("Failed to save model");
+    assert!(save_model_json(&llm, path).is_ok(), "Failed to save model");
 
     // 确认文件存在
     assert!(std::path::Path::new(path).exists());
 
     // 加载
-    let loaded_llm = load_model_json(path).expect("Failed to load model");
+    let loaded_llm = match load_model_json(path) {
+        Ok(m) => m,
+        Err(e) => {
+            assert!(false, "Failed to load model: {}", e);
+            return;
+        }
+    };
 
     // 验证
     assert_eq!(loaded_llm.total_parameters(), original_params);
@@ -62,8 +77,8 @@ fn test_json_save_and_load() {
     assert_eq!(loaded_llm.network.len(), llm.network.len());
 
     // 清理
-    fs::remove_file(path).unwrap();
-    fs::remove_dir("test_exports").unwrap();
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_dir("test_exports");
 
     println!("✓ JSON格式保存/加载测试通过!");
 }

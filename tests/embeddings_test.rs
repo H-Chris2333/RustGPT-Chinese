@@ -80,11 +80,23 @@ fn test_embedding_backwards() {
 
     // Simulate forward and backward pass
     use ndarray::Array2;
-    let input = Array2::from_shape_vec((1, 3), vec![0.0, 1.0, 2.0]).unwrap();
+    let input = match Array2::from_shape_vec((1, 3), vec![0.0, 1.0, 2.0]) {
+        Ok(v) => v,
+        Err(e) => {
+            assert!(false, "构造测试输入矩阵失败: {}", e);
+            return;
+        }
+    };
     let _output = embeddings.forward(&input);
 
     // Create some dummy gradients and run backward pass
-    let grads = Array2::from_shape_vec((3, EMBEDDING_DIM), vec![0.1; 3 * EMBEDDING_DIM]).unwrap();
+    let grads = match Array2::from_shape_vec((3, EMBEDDING_DIM), vec![0.1; 3 * EMBEDDING_DIM]) {
+        Ok(v) => v,
+        Err(e) => {
+            assert!(false, "构造测试梯度矩阵失败: {}", e);
+            return;
+        }
+    };
     let _grad_input = embeddings.backward(&grads, 0.01);
 
     let post_train_token_embeddings = embeddings.token_embeddings.clone();
