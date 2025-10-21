@@ -226,11 +226,16 @@ impl LLM {
         }
 
         for _ in 0..(MAX_SEQ_LEN - input_len) {
-            let token_input = Array2::from_shape_vec(
+            let token_input = match Array2::from_shape_vec(
                 (1, tokenized.len()),
                 tokenized.iter().map(|&x| x as f32).collect(),
-            )
-            .unwrap();
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    log::error!("构造输入张量失败: {}", e);
+                    break;
+                }
+            };
             let mut input = token_input;
 
             for layer in &mut self.network {
@@ -328,7 +333,7 @@ impl LLM {
             output_tokens.push(next_token);
             tokenized.push(next_token);
 
-            if next_token == self.vocab.encode("</s>").unwrap() {
+            if next_token == self.vocab.eos_token_id() {
                 break;
             }
         }
@@ -883,7 +888,7 @@ impl LLM {
                     .enumerate()
                     .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(Ordering::Equal))
                     .map(|(index, _)| index)
-                    .unwrap()
+                    .unwrap_or(0)
             })
             .to_vec()
     }
@@ -1118,11 +1123,16 @@ impl LLM {
         let max_new_tokens = 20.min(MAX_SEQ_LEN - input_len);
 
         for _ in 0..max_new_tokens {
-            let token_input = Array2::from_shape_vec(
+            let token_input = match Array2::from_shape_vec(
                 (1, tokenized.len()),
                 tokenized.iter().map(|&x| x as f32).collect(),
-            )
-            .unwrap();
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    log::error!("构造输入张量失败: {}", e);
+                    break;
+                }
+            };
             let mut input = token_input;
 
             for layer in &mut self.network {
@@ -1155,7 +1165,7 @@ impl LLM {
             output_tokens.push(next_token);
             tokenized.push(next_token);
 
-            if next_token == self.vocab.encode("</s>").unwrap() {
+            if next_token == self.vocab.eos_token_id() {
                 break;
             }
         }
@@ -1219,7 +1229,12 @@ impl LLM {
         let mut grads = probs.clone(); // softmax - one_hot(target)
 
         if probs.shape()[0] != target.len() {
-            panic!("Probs and target must have the same number of rows");
+            log::error!(
+                "梯度计算输入不匹配：probs行数={}，target长度={}",
+                probs.shape()[0],
+                target.len()
+            );
+            return grads; // 返回原始梯度，避免崩溃
         }
 
         let batch_size = target.len() as f32;

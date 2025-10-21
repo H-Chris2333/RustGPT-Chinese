@@ -72,7 +72,13 @@ mod tests {
 
     #[test]
     fn test_softmax_basic() {
-        let input = Array2::from_shape_vec((2, 3), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+        let input = match Array2::from_shape_vec((2, 3), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]) {
+            Ok(v) => v,
+            Err(e) => {
+                assert!(false, "构造测试矩阵失败: {}", e);
+                return;
+            }
+        };
         let output = softmax(&input);
 
         // 检查每行和为1
@@ -98,7 +104,13 @@ mod tests {
     #[test]
     fn test_softmax_numerical_stability() {
         // 测试大数值的稳定性
-        let input = Array2::from_shape_vec((1, 3), vec![1000.0, 1001.0, 1002.0]).unwrap();
+        let input = match Array2::from_shape_vec((1, 3), vec![1000.0, 1001.0, 1002.0]) {
+            Ok(v) => v,
+            Err(e) => {
+                assert!(false, "构造测试矩阵失败: {}", e);
+                return;
+            }
+        };
         let output = softmax(&input);
 
         // 应该不会产生NaN或Inf
@@ -109,7 +121,13 @@ mod tests {
 
     #[test]
     fn test_log_softmax_properties() {
-        let input = Array2::from_shape_vec((1, 3), vec![1.0, 2.0, 3.0]).unwrap();
+        let input = match Array2::from_shape_vec((1, 3), vec![1.0, 2.0, 3.0]) {
+            Ok(v) => v,
+            Err(e) => {
+                assert!(false, "构造测试矩阵失败: {}", e);
+                return;
+            }
+        };
         let ls = log_softmax(&input);
         let s = softmax(&input);
         for i in 0..3 {

@@ -11,6 +11,14 @@ use llm::{
 use std::collections::HashSet;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 初始化日志
+    if let Err(e) = simple_logger::SimpleLogger::new()
+        .with_level(log::LevelFilter::Info)
+        .init()
+    {
+        eprintln!("日志初始化失败: {}", e);
+    }
+
     // 检查命令行参数
     let args: Vec<String> = std::env::args().collect();
 
@@ -162,11 +170,14 @@ fn load_and_use() -> Result<(), Box<dyn std::error::Error>> {
         input.clear();
 
         print!("👤 用户: ");
-        std::io::stdout().flush().unwrap();
+        if let Err(e) = std::io::stdout().flush() {
+            log::warn!("刷新标准输出失败: {}", e);
+        }
 
-        std::io::stdin()
-            .read_line(&mut input)
-            .expect("Failed to read input");
+        if let Err(e) = std::io::stdin().read_line(&mut input) {
+            log::warn!("读取输入失败: {}", e);
+            continue;
+        }
 
         let trimmed_input = input.trim();
         if trimmed_input.eq_ignore_ascii_case("exit") {
@@ -176,7 +187,9 @@ fn load_and_use() -> Result<(), Box<dyn std::error::Error>> {
 
         let formatted_input = format!("用户：{}", trimmed_input);
         print!("🤖 模型: ");
-        std::io::stdout().flush().unwrap();
+        if let Err(e) = std::io::stdout().flush() {
+            log::warn!("刷新标准输出失败: {}", e);
+        }
 
         let prediction = llm.predict_with_beam_search(&formatted_input, 3, 20);
         println!("{}\n", prediction);

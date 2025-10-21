@@ -135,9 +135,15 @@ static JIEBA_INSTANCE: OnceLock<Jieba> = OnceLock::new();
 /// # Panic
 /// 如果无法加载 `data/chinese_idioms.json`，程序会 panic
 fn common_idioms() -> &'static HashSet<String> {
-    COMMON_IDIOM_SET.get_or_init(|| {
-        load_common_idioms_from_file()
-            .expect("Failed to load chinese idioms from data/chinese_idioms.json")
+    COMMON_IDIOM_SET.get_or_init(|| match load_common_idioms_from_file() {
+        Ok(set) => set,
+        Err(e) => {
+            log::error!(
+                "Failed to load chinese idioms from data/chinese_idioms.json: {}",
+                e
+            );
+            HashSet::new()
+        }
     })
 }
 
@@ -709,7 +715,9 @@ impl Vocab {
                 text.clone()
             };
             println!("     内容预览: {}...", preview);
-            std::io::stdout().flush().unwrap();
+            if let Err(e) = std::io::stdout().flush() {
+                log::warn!("刷新标准输出失败: {}", e);
+            }
 
             // Check if the text contains Chinese characters
             let has_chinese = text
@@ -722,7 +730,9 @@ impl Vocab {
 
                 // Use Jieba for Chinese text tokenization
                 println!("     ⏳ 开始 Jieba 分词...");
-                std::io::stdout().flush().unwrap();
+                if let Err(e) = std::io::stdout().flush() {
+                    log::warn!("刷新标准输出失败: {}", e);
+                }
 
                 let tokens = jieba.cut(text, false);
                 let token_count = tokens.len();
@@ -823,7 +833,13 @@ impl Vocab {
     /// - `vocab_set`: 词汇集合（会添加识别出的短语）
     fn extract_chinese_phrases(text: &str, vocab_set: &mut HashSet<String>) {
         // Common Chinese idioms (四字成语) - these are often not segmented properly by Jieba
-        let idiom_regex = Regex::new(r"[\u4e00-\u9fff]{4}").unwrap();
+        let idiom_regex = match Regex::new(r"[\u4e00-\u9fff]{4}") {
+            Ok(re) => re,
+            Err(e) => {
+                log::warn!("成语正则编译失败: {}，跳过成语提取", e);
+                return;
+            }
+        };
         for mat in idiom_regex.find_iter(text) {
             let idiom = mat.as_str();
             if Self::is_common_chinese_idiom(idiom) {
@@ -832,7 +848,13 @@ impl Vocab {
         }
 
         // Common multi-character phrases that might be relevant
-        let phrase_regex = Regex::new(r"[\u4e00-\u9fff]{2,6}").unwrap();
+        let phrase_regex = match Regex::new(r"[\u4e00-\u9fff]{2,6}") {
+            Ok(re) => re,
+            Err(e) => {
+                log::warn!("短语正则编译失败: {}，跳过短语提取", e);
+                return;
+            }
+        };
         for mat in phrase_regex.find_iter(text) {
             let phrase = mat.as_str();
             if Self::is_meaningful_phrase(phrase) {

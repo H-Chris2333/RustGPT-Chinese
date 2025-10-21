@@ -37,6 +37,7 @@
 //! - 这种设计有助于模型学习抽象的、压缩的特征表示
 
 use ndarray::{Array2, Axis};
+use rand::Rng;
 use rand_distr::{Distribution, Normal};
 
 use crate::{adam::Adam, llm::Layer};
@@ -108,16 +109,33 @@ impl FeedForward {
 
         // He 初始化 W₁
         let std_w1 = (2.0 / embedding_dim as f32).sqrt();
-        let normal_w1 = Normal::new(0.0, std_w1).unwrap();
+        let normal_w1 = Normal::new(0.0, std_w1).ok();
 
         // He 初始化 W₂
         let std_w2 = (2.0 / hidden_dim as f32).sqrt();
-        let normal_w2 = Normal::new(0.0, std_w2).unwrap();
+        let normal_w2 = Normal::new(0.0, std_w2).ok();
+
+        let w1 = if let Some(normal) = normal_w1 {
+            Array2::from_shape_fn((embedding_dim, hidden_dim), |_| normal.sample(&mut rng))
+        } else {
+            log::warn!("FeedForward: 正态分布初始化失败，W1改用均匀分布");
+            Array2::from_shape_fn((embedding_dim, hidden_dim), |_| {
+                rng.random_range(-std_w1..std_w1)
+            })
+        };
+        let w2 = if let Some(normal) = normal_w2 {
+            Array2::from_shape_fn((hidden_dim, embedding_dim), |_| normal.sample(&mut rng))
+        } else {
+            log::warn!("FeedForward: 正态分布初始化失败，W2改用均匀分布");
+            Array2::from_shape_fn((hidden_dim, embedding_dim), |_| {
+                rng.random_range(-std_w2..std_w2)
+            })
+        };
 
         FeedForward {
-            w1: Array2::from_shape_fn((embedding_dim, hidden_dim), |_| normal_w1.sample(&mut rng)),
+            w1,
             b1: Array2::zeros((1, hidden_dim)), // 偏置初始化为0
-            w2: Array2::from_shape_fn((hidden_dim, embedding_dim), |_| normal_w2.sample(&mut rng)),
+            w2,
             b2: Array2::zeros((1, embedding_dim)), // 偏置初始化为0
             input: None,
             hidden_pre_activation: None,
@@ -164,9 +182,14 @@ impl Layer for FeedForward {
     /// 这意味着只有激活的神经元（值>0）会传播梯度，其他神经元梯度为0。
     fn backward(&mut self, grads: &Array2<f32>, lr: f32) -> Array2<f32> {
         // 从缓存中获取前向传播的中间结果
-        let input = self.input.as_ref().expect("forward must be run first");
-        let hidden_pre_activation = self.hidden_pre_activation.as_ref().unwrap();
-        let hidden_post_activation = self.hidden_post_activation.as_ref().unwrap();
+        let (Some(input), Some(hidden_pre_activation), Some(hidden_post_activation)) = (
+            self.input.as_ref(),
+            self.hidden_pre_activation.as_ref(),
+            self.hidden_post_activation.as_ref(),
+        ) else {
+            log::warn!("FeedForward.backward 在未执行 forward 的情况下被调用，跳过参数更新");
+            return grads.clone();
+        };
 
         // ========== 反向传播第二层（输出层） ==========
         // grad_W₂ = h_activated^T · grad_output

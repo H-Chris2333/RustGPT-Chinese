@@ -43,21 +43,43 @@ impl Dataset {
 
 fn get_data_from_json(path: String) -> Vec<String> {
     // convert json file to Vec<String>
-    let data_json = fs::read_to_string(path).expect("Failed to read data file");
-    let data: Vec<String> = serde_json::from_str(&data_json).expect("Failed to parse data file");
-    data
+    match fs::read_to_string(&path) {
+        Ok(data_json) => match serde_json::from_str::<Vec<String>>(&data_json) {
+            Ok(data) => data,
+            Err(e) => {
+                log::error!("解析JSON数据失败 ({}): {}", path, e);
+                Vec::new()
+            }
+        },
+        Err(e) => {
+            log::error!("读取数据文件失败 ({}): {}", path, e);
+            Vec::new()
+        }
+    }
 }
 
 fn get_data_from_csv(path: String) -> Vec<String> {
     // convert csv file to Vec<String>
-    let file = fs::File::open(path).expect("Failed to open CSV file");
+    let file = match fs::File::open(&path) {
+        Ok(f) => f,
+        Err(e) => {
+            log::error!("打开CSV文件失败 ({}): {}", path, e);
+            return Vec::new();
+        }
+    };
     let mut rdr = ReaderBuilder::new().has_headers(false).from_reader(file);
     let mut data = Vec::new();
 
     for result in rdr.records() {
-        let record = result.expect("Failed to read CSV record");
-        // Each record is a row, join all columns into a single string
-        data.push(record.iter().collect::<Vec<_>>().join(","));
+        match result {
+            Ok(record) => {
+                // Each record is a row, join all columns into a single string
+                data.push(record.iter().collect::<Vec<_>>().join(","));
+            }
+            Err(e) => {
+                log::warn!("读取CSV记录失败 ({}): {}", path, e);
+            }
+        }
     }
     data
 }

@@ -130,7 +130,12 @@ impl PositionEncoding {
     /// 如果位置或维度超出范围，程序会 panic
     pub fn get_encoding(&self, position: usize, dimension: usize) -> f32 {
         if position >= MAX_SEQ_LEN || dimension >= EMBEDDING_DIM {
-            panic!("Position or dimension out of bounds");
+            log::warn!(
+                "位置编码索引越界 position={} dimension={}，将返回0.0 作为回退",
+                position,
+                dimension
+            );
+            return 0.0;
         }
         self.encoding[[position, dimension]]
     }

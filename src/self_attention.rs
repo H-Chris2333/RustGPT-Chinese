@@ -71,6 +71,7 @@
 use std::f32;
 
 use ndarray::{Array2, Axis, s};
+use rand::Rng;
 use rand_distr::{Distribution, Normal};
 
 use crate::utils::softmax;
@@ -189,22 +190,62 @@ impl SelfAttention {
         let head_dim = embedding_dim / num_heads;
 
         // 确保维度可以被头数整除
-        if embedding_dim % num_heads != 0 {
-            panic!("Embedding dimension must be divisible by number of heads");
-        }
+        let (num_heads, head_dim) = if embedding_dim % num_heads != 0 {
+            log::warn!(
+                "embedding_dim={} 不能被 num_heads={} 整除，回退为单头注意力",
+                embedding_dim,
+                num_heads
+            );
+            (1, embedding_dim)
+        } else {
+            (num_heads, head_dim)
+        };
 
         // He 初始化：std = sqrt(2 / fan_in)
         let std = (2.0 / embedding_dim as f32).sqrt();
-        let normal = Normal::new(0.0, std).unwrap();
+        let normal_ok = Normal::new(0.0, std).ok();
+
+        let w_q = if let Some(normal) = normal_ok.clone() {
+            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| normal.sample(&mut rng))
+        } else {
+            log::warn!("SelfAttention: 正态分布初始化失败，W_q改用均匀分布");
+            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| {
+                rng.random_range(-std..std)
+            })
+        };
+        let w_k = if let Some(normal) = normal_ok.clone() {
+            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| normal.sample(&mut rng))
+        } else {
+            log::warn!("SelfAttention: 正态分布初始化失败，W_k改用均匀分布");
+            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| {
+                rng.random_range(-std..std)
+            })
+        };
+        let w_v = if let Some(normal) = normal_ok.clone() {
+            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| normal.sample(&mut rng))
+        } else {
+            log::warn!("SelfAttention: 正态分布初始化失败，W_v改用均匀分布");
+            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| {
+                rng.random_range(-std..std)
+            })
+        };
+        let w_o = if let Some(normal) = normal_ok {
+            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| normal.sample(&mut rng))
+        } else {
+            log::warn!("SelfAttention: 正态分布初始化失败，W_o改用均匀分布");
+            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| {
+                rng.random_range(-std..std)
+            })
+        };
 
         SelfAttention {
             embedding_dim,
             num_heads,
             head_dim,
-            w_q: Array2::from_shape_fn((embedding_dim, embedding_dim), |_| normal.sample(&mut rng)),
-            w_k: Array2::from_shape_fn((embedding_dim, embedding_dim), |_| normal.sample(&mut rng)),
-            w_v: Array2::from_shape_fn((embedding_dim, embedding_dim), |_| normal.sample(&mut rng)),
-            w_o: Array2::from_shape_fn((embedding_dim, embedding_dim), |_| normal.sample(&mut rng)),
+            w_q,
+            w_k,
+            w_v,
+            w_o,
             cached_input: None,
             cached_q: None,
             cached_k: None,
@@ -512,8 +553,20 @@ impl SelfAttention {
         let (k_all, v_all) = if let Some((k_cache, v_cache)) = &self.kv_cache {
             // 如果有缓存，拼接新的K和V
             use ndarray::concatenate;
-            let k_all = concatenate(Axis(0), &[k_cache.view(), k_new.view()]).unwrap();
-            let v_all = concatenate(Axis(0), &[v_cache.view(), v_new.view()]).unwrap();
+            let k_all = match concatenate(Axis(0), &[k_cache.view(), k_new.view()]) {
+                Ok(v) => v,
+                Err(e) => {
+                    log::warn!("KV缓存拼接失败(K): {}，使用未缓存的K", e);
+                    k_new.clone()
+                }
+            };
+            let v_all = match concatenate(Axis(0), &[v_cache.view(), v_new.view()]) {
+                Ok(v) => v,
+                Err(e) => {
+                    log::warn!("KV缓存拼接失败(V): {}，使用未缓存的V", e);
+                    v_new.clone()
+                }
+            };
             (k_all, v_all)
         } else {
             // 如果没有缓存，直接使用新的K和V
@@ -567,11 +620,16 @@ impl Layer for SelfAttention {
 
     fn backward(&mut self, grads: &Array2<f32>, lr: f32) -> Array2<f32> {
         // 获取缓存的前向传播中间变量
-        let input = self.cached_input.as_ref().unwrap();
-        let _q = self.cached_q.as_ref().unwrap();
-        let _k = self.cached_k.as_ref().unwrap();
-        let _v = self.cached_v.as_ref().unwrap();
-        let attention_output = self.cached_attention_output.as_ref().unwrap();
+        let (Some(input), Some(_q), Some(_k), Some(_v), Some(attention_output)) = (
+            self.cached_input.as_ref(),
+            self.cached_q.as_ref(),
+            self.cached_k.as_ref(),
+            self.cached_v.as_ref(),
+            self.cached_attention_output.as_ref(),
+        ) else {
+            log::warn!("SelfAttention.backward 在未执行 forward 的情况下被调用，直接传递梯度");
+            return grads.clone();
+        };
 
         // ========== 步骤1: 计算输出投影层的梯度 ==========
         // output = attention_output @ W_o

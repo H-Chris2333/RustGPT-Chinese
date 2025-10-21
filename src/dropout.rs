@@ -162,12 +162,16 @@ impl Layer for Dropout {
 
     fn backward(&mut self, grads: &Array2<f32>, _lr: f32) -> Array2<f32> {
         if self.training && self.dropout_rate > 0.0 {
-            let mask = self.mask.as_ref().unwrap();
-            let scale_factor = 1.0 / (1.0 - self.dropout_rate);
-            let mut result = grads.clone();
-            result *= mask;
-            result *= scale_factor;
-            result
+            if let Some(mask) = self.mask.as_ref() {
+                let scale_factor = 1.0 / (1.0 - self.dropout_rate);
+                let mut result = grads.clone();
+                result *= mask;
+                result *= scale_factor;
+                result
+            } else {
+                log::warn!("Dropout.backward 未找到mask，直接传递梯度");
+                grads.clone()
+            }
         } else {
             grads.clone()
         }

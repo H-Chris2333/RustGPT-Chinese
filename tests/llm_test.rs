@@ -37,7 +37,10 @@ impl Layer for TestOutputProjectionLayer {
 
     // Need to test this next
     fn backward(&mut self, grads: &Array2<f32>, _lr: f32) -> Array2<f32> {
-        let input = self.cache_input.as_ref().unwrap();
+        let Some(input) = self.cache_input.as_ref() else {
+            // If forward wasn't called, just pass gradients through
+            return grads.clone();
+        };
 
         // use chain rule
         let grad_input = input.dot(grads);
