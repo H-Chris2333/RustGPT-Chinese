@@ -39,3 +39,8 @@ path = "src/lib.rs"
 [[bin]]
 name = "llm"
 path = "src/main.rs"
+
+[[bench]]
+name = "memory_optimization_bench"
+path = "benches/memory_optimization_bench.rs"
+harness = false

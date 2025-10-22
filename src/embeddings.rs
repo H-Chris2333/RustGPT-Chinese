@@ -81,6 +81,11 @@ pub struct Embeddings {
     ///
     /// 用于更新词嵌入矩阵的参数。每个词的嵌入向量独立更新。
     pub token_optimizer: Adam,
+
+    /// **位置编码缓存** (性能优化)
+    ///
+    /// 预分配的缓冲区，避免每次forward都重新分配Array2
+    pub position_cache: Array2<f32>,
 }
 
 impl Default for Embeddings {
@@ -91,6 +96,7 @@ impl Default for Embeddings {
             position_encoder: PositionEncoding::new(),
             cached_input: None,
             token_optimizer: Adam::new((vocab.words.len(), EMBEDDING_DIM)),
+            position_cache: Array2::<f32>::zeros((crate::MAX_SEQ_LEN, EMBEDDING_DIM)),
         }
     }
 }
@@ -109,6 +115,7 @@ impl Embeddings {
             position_encoder: PositionEncoding::new(),
             cached_input: None,
             token_optimizer: Adam::new((vocab.words.len(), EMBEDDING_DIM)),
+            position_cache: Array2::<f32>::zeros((crate::MAX_SEQ_LEN, EMBEDDING_DIM)),
         }
     }
 
@@ -177,7 +184,7 @@ impl Embeddings {
     ///
     /// # 算法步骤
     /// 1. 根据 token ID 查询词嵌入
-    /// 2. 为每个位置生成位置编码
+    /// 2. 从预生成的位置编码矩阵中获取对应slice
     /// 3. 将词嵌入和位置编码逐元素相加
     ///
     /// # 参数
@@ -195,10 +202,10 @@ impl Embeddings {
     ///   position 1: token_id=12 → embedding_12
     ///   position 2: token_id=3  → embedding_3
     ///
-    /// 步骤 2 - 生成位置编码:
-    ///   position 0: PE(0) = [sin(0/10000^0), cos(0/10000^0), ...]
-    ///   position 1: PE(1) = [sin(1/10000^0), cos(1/10000^0), ...]
-    ///   position 2: PE(2) = [sin(2/10000^0), cos(2/10000^0), ...]
+    /// 步骤 2 - 从预生成的position_encoder.encoding中slice位置编码:
+    ///   position 0: PE(0) 直接从encoding[0]取
+    ///   position 1: PE(1) 直接从encoding[1]取
+    ///   position 2: PE(2) 直接从encoding[2]取
     ///
     /// 步骤 3 - 逐元素相加:
     ///   final[0] = embedding_5 + PE(0)
@@ -209,11 +216,12 @@ impl Embeddings {
         // 步骤 1：查询词嵌入
         let token_embeds = Self::get_token_embeddings(&self.token_embeddings, token_ids);
 
-        // 步骤 2：生成位置编码矩阵
-        let mut position_embeds = Array2::<f32>::zeros((token_ids.len(), EMBEDDING_DIM));
-        Zip::indexed(&mut position_embeds).par_for_each(|(i, j), value| {
-            *value = self.position_encoder.get_encoding(i, j);
-        });
+        // 步骤 2：直接从预生成的位置编码矩阵中切片，避免重新分配
+        let seq_len = token_ids.len();
+        let position_embeds = self
+            .position_encoder
+            .encoding
+            .slice(ndarray::s![0..seq_len, ..]);
 
         // 步骤 3：逐元素相加
         token_embeds + position_embeds

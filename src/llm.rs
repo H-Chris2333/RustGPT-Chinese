@@ -31,6 +31,10 @@ pub struct LLM {
     pub max_context_length: usize,
     pub training: bool,
     pub parallel_training: bool,
+    // 性能优化：可重用的采样缓冲区（public以便序列化）
+    pub sampling_prob_buffer: Vec<f32>,
+    pub sampling_idx_buffer: Vec<(f32, usize)>,
+    pub beam_candidates_buffer: Vec<(Vec<usize>, f32)>,
 }
 
 /// 早停机制
@@ -101,6 +105,7 @@ impl Default for LLM {
         let transformer_block_3 = TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM);
         let transformer_block_4 = TransformerBlock::new(EMBEDDING_DIM, HIDDEN_DIM);
         let output_projection = OutputProjection::new(EMBEDDING_DIM, Vocab::default_words().len());
+        let vocab_size = Vocab::default_words().len();
         Self {
             vocab: Vocab::default(),
             network: vec![
@@ -115,12 +120,16 @@ impl Default for LLM {
             max_context_length: MAX_SEQ_LEN,
             training: true,
             parallel_training: true,
+            sampling_prob_buffer: Vec::with_capacity(vocab_size),
+            sampling_idx_buffer: Vec::with_capacity(vocab_size),
+            beam_candidates_buffer: Vec::with_capacity(50),
         }
     }
 }
 
 impl LLM {
     pub fn new(vocab: Vocab, network: Vec<Box<dyn Layer>>) -> Self {
+        let vocab_size = vocab.words.len();
         Self {
             vocab,
             network,
@@ -128,6 +137,9 @@ impl LLM {
             max_context_length: MAX_SEQ_LEN,
             training: true,
             parallel_training: true,
+            sampling_prob_buffer: Vec::with_capacity(vocab_size),
+            sampling_idx_buffer: Vec::with_capacity(vocab_size),
+            beam_candidates_buffer: Vec::with_capacity(50),
         }
     }
 }
@@ -953,39 +965,42 @@ impl LLM {
     }
 
     /// Top-k sampling: only consider the k most probable tokens
-    fn top_k_sampling(&self, probs: &Array2<f32>, k: usize) -> Vec<usize> {
+    /// 优化版本：复用内部缓冲区减少分配
+    fn top_k_sampling(&mut self, probs: &Array2<f32>, k: usize) -> Vec<usize> {
         let mut result = Vec::new();
 
         for row in probs.rows() {
-            // Create a vector of (probability, index) pairs
-            let mut prob_idx_pairs: Vec<(f32, usize)> = row
-                .iter()
-                .enumerate()
-                .map(|(idx, &prob)| (prob, idx))
-                .collect();
+            // 复用 sampling_idx_buffer
+            self.sampling_idx_buffer.clear();
+            self.sampling_idx_buffer
+                .extend(row.iter().enumerate().map(|(idx, &prob)| (prob, idx)));
 
             // Sort by probability in descending order and take top k
-            prob_idx_pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
-            let top_k_pairs = &prob_idx_pairs[..k.min(prob_idx_pairs.len())];
+            self.sampling_idx_buffer
+                .sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+            let top_k_len = k.min(self.sampling_idx_buffer.len());
 
-            // Create a new probability distribution from top-k tokens
-            let mut top_k_probs = vec![0.0; self.vocab.words.len()];
+            // 复用 sampling_prob_buffer
+            self.sampling_prob_buffer.clear();
+            self.sampling_prob_buffer
+                .resize(self.vocab.words.len(), 0.0);
             let mut sum = 0.0;
 
-            for &(prob, idx) in top_k_pairs {
-                top_k_probs[idx] = prob;
+            for i in 0..top_k_len {
+                let (prob, idx) = self.sampling_idx_buffer[i];
+                self.sampling_prob_buffer[idx] = prob;
                 sum += prob;
             }
 
             // Normalize the probabilities
             if sum > 0.0 {
-                for p in &mut top_k_probs {
+                for p in &mut self.sampling_prob_buffer {
                     *p /= sum;
                 }
             }
 
             // Sample from the top-k distribution
-            result.push(self.sample_from_probs(&top_k_probs));
+            result.push(self.sample_from_probs(&self.sampling_prob_buffer));
         }
 
         result
@@ -993,51 +1008,53 @@ impl LLM {
 
     /// Top-p (nucleus) sampling: consider the smallest set of tokens whose cumulative probability
     /// exceeds p
-    fn top_p_sampling(&self, probs: &Array2<f32>, p: f32) -> Vec<usize> {
+    /// 优化版本：复用内部缓冲区减少分配
+    fn top_p_sampling(&mut self, probs: &Array2<f32>, p: f32) -> Vec<usize> {
         let mut result = Vec::new();
 
         for row in probs.rows() {
-            // Create a vector of (probability, index) pairs and sort by probability in descending
-            // order
-            let mut prob_idx_pairs: Vec<(f32, usize)> = row
-                .iter()
-                .enumerate()
-                .map(|(idx, &prob)| (prob, idx))
-                .collect();
+            // 复用 sampling_idx_buffer
+            self.sampling_idx_buffer.clear();
+            self.sampling_idx_buffer
+                .extend(row.iter().enumerate().map(|(idx, &prob)| (prob, idx)));
 
-            prob_idx_pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+            self.sampling_idx_buffer
+                .sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
 
             // Find the smallest set of tokens whose cumulative probability exceeds p
             let mut cumulative_prob = 0.0;
-            let mut selected_pairs = Vec::new();
+            let mut selected_count = 0;
 
-            for &(prob, idx) in &prob_idx_pairs {
+            for &(prob, _) in &self.sampling_idx_buffer {
                 cumulative_prob += prob;
-                selected_pairs.push((prob, idx));
+                selected_count += 1;
 
                 if cumulative_prob >= p {
                     break;
                 }
             }
 
-            // Create a new probability distribution from selected tokens
-            let mut selected_probs = vec![0.0; self.vocab.words.len()];
+            // 复用 sampling_prob_buffer
+            self.sampling_prob_buffer.clear();
+            self.sampling_prob_buffer
+                .resize(self.vocab.words.len(), 0.0);
             let mut sum = 0.0;
 
-            for &(prob, idx) in &selected_pairs {
-                selected_probs[idx] = prob;
+            for i in 0..selected_count {
+                let (prob, idx) = self.sampling_idx_buffer[i];
+                self.sampling_prob_buffer[idx] = prob;
                 sum += prob;
             }
 
             // Normalize the probabilities
             if sum > 0.0 {
-                for p in &mut selected_probs {
-                    *p /= sum;
+                for p_val in &mut self.sampling_prob_buffer {
+                    *p_val /= sum;
                 }
             }
 
             // Sample from the selected distribution
-            result.push(self.sample_from_probs(&selected_probs));
+            result.push(self.sample_from_probs(&self.sampling_prob_buffer));
         }
 
         result
@@ -1071,6 +1088,7 @@ impl LLM {
     }
 
     /// Beam search implementation
+    /// 优化版本：复用candidates缓冲区减少分配
     fn beam_search(&mut self, text: &str, beam_width: usize, max_length: usize) -> String {
         // Tokenize the input text
         let initial_tokens = self.tokenize(text);
@@ -1082,7 +1100,8 @@ impl LLM {
         let mut current_beams = vec![(initial_tokens.clone(), 0.0f32)]; // (sequence, log_probability)
 
         for _ in initial_tokens.len()..max_length {
-            let mut candidates = Vec::new();
+            // 复用 beam_candidates_buffer
+            self.beam_candidates_buffer.clear();
 
             for (seq, log_prob) in &current_beams {
                 // Get model prediction for the current sequence
@@ -1101,30 +1120,40 @@ impl LLM {
                 // Get the probabilities for the last token position
                 let last_token_probs = probs.row(probs.nrows() - 1);
 
-                // Get top-k candidates for this sequence
-                let mut token_probs: Vec<(f32, usize)> = last_token_probs
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, &prob)| (prob, idx))
-                    .collect();
+                // 复用 sampling_idx_buffer 获取 top-k candidates
+                self.sampling_idx_buffer.clear();
+                self.sampling_idx_buffer.extend(
+                    last_token_probs
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, &prob)| (prob, idx)),
+                );
 
-                token_probs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+                self.sampling_idx_buffer
+                    .sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
 
                 // Add candidates with updated sequences and log probabilities
-                for &(prob, token_id) in token_probs.iter().take(beam_width) {
+                for i in 0..beam_width.min(self.sampling_idx_buffer.len()) {
+                    let (prob, token_id) = self.sampling_idx_buffer[i];
                     if prob > 0.0 {
                         // Only consider non-zero probability tokens
                         let mut new_seq = seq.clone();
                         new_seq.push(token_id);
                         let new_log_prob = log_prob + prob.ln(); // Add log probabilities
-                        candidates.push((new_seq, new_log_prob));
+                        self.beam_candidates_buffer.push((new_seq, new_log_prob));
                     }
                 }
             }
 
             // Sort candidates by log probability and keep the top beam_width
-            candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
-            current_beams = candidates.into_iter().take(beam_width).collect();
+            self.beam_candidates_buffer
+                .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+            current_beams = self
+                .beam_candidates_buffer
+                .iter()
+                .take(beam_width)
+                .cloned()
+                .collect();
 
             // Check if any beam has generated an end token
             if current_beams.iter().any(|(seq, _)| {
