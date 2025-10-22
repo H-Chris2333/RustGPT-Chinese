@@ -71,6 +71,7 @@
 use std::f32;
 
 use ndarray::{Array2, Axis, s};
+use ndarray::parallel::prelude::*;
 use rand::Rng;
 use rand_distr::{Distribution, Normal};
 
@@ -313,12 +314,7 @@ impl SelfAttention {
     /// # 返回值
     /// - `output`: 注意力输出 (seq_len, head_dim)
     /// - `weights`: 注意力权重 (seq_len, seq_len)，用于反向传播
-    fn attention(
-        &self,
-        q: &Array2<f32>,
-        k: &Array2<f32>,
-        v: &Array2<f32>,
-    ) -> (Array2<f32>, Array2<f32>) {
+    fn attention(q: &Array2<f32>, k: &Array2<f32>, v: &Array2<f32>) -> (Array2<f32>, Array2<f32>) {
         // 步骤 1: 计算缩放点积注意力分数
         let dk = (q.ncols() as f32).sqrt(); // √d_k = √64 = 8
         let k_t = k.t();
@@ -384,7 +380,6 @@ impl SelfAttention {
         // 预分配结果矩阵
         let mut result = Array2::zeros((seq_len * self.num_heads, self.head_dim));
 
-        // 优化的重排逻辑：减少内存访问次数
         for seq_idx in 0..seq_len {
             let row = x.row(seq_idx);
             for head_idx in 0..self.num_heads {
@@ -392,7 +387,6 @@ impl SelfAttention {
                 let end_dim = start_dim + self.head_dim;
                 let result_row_idx = seq_idx * self.num_heads + head_idx;
 
-                // 使用切片赋值，比逐元素复制更高效
                 result
                     .row_mut(result_row_idx)
                     .assign(&row.slice(s![start_dim..end_dim]));
@@ -429,14 +423,12 @@ impl SelfAttention {
 
         let mut result = Array2::zeros((seq_len, self.num_heads * self.head_dim));
 
-        // 优化的反向重排逻辑
         for seq_idx in 0..seq_len {
             for head_idx in 0..self.num_heads {
                 let src_row_idx = seq_idx * self.num_heads + head_idx;
                 let dst_start = head_idx * self.head_dim;
                 let dst_end = dst_start + self.head_dim;
 
-                // 使用切片赋值
                 result
                     .slice_mut(s![seq_idx, dst_start..dst_end])
                     .assign(&x.row(src_row_idx));
@@ -475,25 +467,30 @@ impl SelfAttention {
         let v_heads = self.reshape_for_heads(&v);
 
         // 3. 对每个头计算注意力
+        let head_outputs: Vec<Array2<f32>> = (0..self.num_heads)
+            .into_par_iter()
+            .map(|head| {
+                let q_head = q_heads
+                    .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
+                    .to_owned();
+                let k_head = k_heads
+                    .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
+                    .to_owned();
+                let v_head = v_heads
+                    .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
+                    .to_owned();
+
+                let (head_output, _head_weights) = Self::attention(&q_head, &k_head, &v_head);
+                head_output
+            })
+            .collect();
+
         let mut result = Array2::zeros((seq_len * self.num_heads, self.head_dim));
-
-        for head in 0..self.num_heads {
-            let q_head = q_heads
-                .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
-                .to_owned();
-            let k_head = k_heads
-                .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
-                .to_owned();
-            let v_head = v_heads
-                .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
-                .to_owned();
-
-            let (head_output, _head_weights) = self.attention(&q_head, &k_head, &v_head);
-
-            for i in 0..seq_len {
-                for j in 0..self.head_dim {
-                    result[[i * self.num_heads + head, j]] = head_output[[i, j]];
-                }
+        for head_idx in 0..self.num_heads {
+            let head_output = &head_outputs[head_idx];
+            for seq_idx in 0..seq_len {
+                let row_idx = seq_idx * self.num_heads + head_idx;
+                result.row_mut(row_idx).assign(&head_output.row(seq_idx));
             }
         }
 
@@ -582,21 +579,26 @@ impl SelfAttention {
         let v_heads = self.reshape_for_heads(&v_all);
 
         // 5. 对每个头计算注意力
+        let head_outputs: Vec<Array2<f32>> = (0..self.num_heads)
+            .into_par_iter()
+            .map(|head| {
+                let q_head = q_heads
+                    .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
+                    .to_owned();
+                let k_head = k_heads.slice(s![head..; self.num_heads, ..]).to_owned();
+                let v_head = v_heads.slice(s![head..; self.num_heads, ..]).to_owned();
+
+                let (head_output, _head_weights) = Self::attention(&q_head, &k_head, &v_head);
+                head_output
+            })
+            .collect();
+
         let mut result = Array2::zeros((seq_len * self.num_heads, self.head_dim));
-
-        for head in 0..self.num_heads {
-            let q_head = q_heads
-                .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
-                .to_owned();
-            let k_head = k_heads.slice(s![head..; self.num_heads, ..]).to_owned();
-            let v_head = v_heads.slice(s![head..; self.num_heads, ..]).to_owned();
-
-            let (head_output, _head_weights) = self.attention(&q_head, &k_head, &v_head);
-
-            for i in 0..seq_len {
-                for j in 0..self.head_dim {
-                    result[[i * self.num_heads + head, j]] = head_output[[i, j]];
-                }
+        for head_idx in 0..self.num_heads {
+            let head_output = &head_outputs[head_idx];
+            for seq_idx in 0..seq_len {
+                let row_idx = seq_idx * self.num_heads + head_idx;
+                result.row_mut(row_idx).assign(&head_output.row(seq_idx));
             }
         }
 

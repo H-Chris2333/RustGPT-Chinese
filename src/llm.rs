@@ -1,13 +1,15 @@
 use std::cmp::Ordering;
+use std::sync::{Arc, Mutex};
 
 use ndarray::{Array1, Array2, Axis};
-use rand::{Rng, rng};
+use rand::{rng, Rng};
+use rayon::{prelude::*, scope};
 
 use crate::{
-    EMBEDDING_DIM, Embeddings, HIDDEN_DIM, MAX_SEQ_LEN, SOFTMAX_EPSILON, Vocab,
     output_projection::OutputProjection,
     transformer::TransformerBlock,
     utils::{log_softmax, softmax},
+    Embeddings, PerformanceMonitor, Vocab, EMBEDDING_DIM, HIDDEN_DIM, MAX_SEQ_LEN, SOFTMAX_EPSILON,
 };
 pub trait Layer {
     fn layer_type(&self) -> &str;
@@ -28,6 +30,7 @@ pub struct LLM {
     pub context_window: Vec<usize>,
     pub max_context_length: usize,
     pub training: bool,
+    pub parallel_training: bool,
 }
 
 /// 早停机制
@@ -111,6 +114,7 @@ impl Default for LLM {
             context_window: Vec::new(),
             max_context_length: MAX_SEQ_LEN,
             training: true,
+            parallel_training: true,
         }
     }
 }
@@ -123,6 +127,7 @@ impl LLM {
             context_window: Vec::new(),
             max_context_length: MAX_SEQ_LEN,
             training: true,
+            parallel_training: true,
         }
     }
 }
@@ -148,6 +153,14 @@ impl LLM {
         for layer in &mut self.network {
             layer.set_training_mode(training);
         }
+    }
+
+    pub fn set_parallel_training(&mut self, enabled: bool) {
+        self.parallel_training = enabled;
+    }
+
+    pub fn parallel_training_enabled(&self) -> bool {
+        self.parallel_training
     }
 
     #[allow(dead_code)]
@@ -523,24 +536,25 @@ impl LLM {
         grads.iter().map(|&x| x * x).sum::<f32>().sqrt()
     }
 
-    /// 完整优化的训练方法（集成所有阶段1优化）
+    /// 完整优化的训练方法（集成并行预处理与监控）
     ///
-    /// # 优化特性
-    /// - ✅ 数据预处理缓存（避免重复tokenization）
+    /// # 特性
+    /// - ✅ 数据预处理缓存（避免重复 tokenization）
+    /// - ✅ Rayon 并行 tokenization（可根据数据量自动回退）
     /// - ✅ 余弦退火学习率调度
     /// - ✅ 早停机制
     /// - ✅ 增强训练监控（困惑度、梯度范数、训练速度）
-    /// - ✅ 梯度累积（模拟大batch训练）
+    /// - ✅ Rayon scope 梯度归约（可根据数据量自动回退）
     ///
     /// # 参数
     /// - `data`: 训练数据
-    /// - `max_epochs`: 最大epoch数
+    /// - `max_epochs`: 最大 epoch 数
     /// - `initial_lr`: 初始学习率
-    /// - `patience`: 早停容忍epoch数
-    /// - `accumulation_steps`: 梯度累积步数（推荐4-8）
+    /// - `patience`: 早停容忍 epoch 数
+    /// - `accumulation_steps`: 梯度累积步数（推荐 4-8）
     ///
     /// # 返回值
-    /// 实际训练的epoch数
+    /// 实际训练的 epoch 数
     pub fn train_monitored(
         &mut self,
         data: Vec<&str>,
@@ -551,15 +565,60 @@ impl LLM {
     ) -> usize {
         self.set_training_mode(true);
 
-        // 🔥 优化1：数据预处理缓存（一次性tokenize，避免重复计算）
+        const MIN_PARALLEL_TOKENIZE: usize = 16;
+        const MIN_PARALLEL_GRAD: usize = 8;
+
+        let mut perf_monitor = PerformanceMonitor::new();
+        let effective_accum_steps = accumulation_steps.max(1);
+
         println!("📝 正在预处理训练数据...");
-        let start_time = std::time::Instant::now();
-        let tokenized_data: Vec<Vec<usize>> =
-            data.iter().map(|input| self.tokenize(input)).collect();
+        let preprocess_start = std::time::Instant::now();
+
+        let should_parallel_preprocess =
+            self.parallel_training && data.len() >= MIN_PARALLEL_TOKENIZE;
+
+        let preprocess_label = if should_parallel_preprocess {
+            "tokenization_parallel"
+        } else {
+            "tokenization_single_thread"
+        };
+
+        perf_monitor.start(preprocess_label);
+        let tokenized_data: Vec<Vec<usize>> = if should_parallel_preprocess {
+            data.par_iter()
+                .map(|input| Self::tokenize_with_vocab(&self.vocab, input))
+                .collect()
+        } else {
+            data.iter()
+                .map(|input| Self::tokenize_with_vocab(&self.vocab, input))
+                .collect()
+        };
+        perf_monitor.stop(preprocess_label);
+
         println!(
             "✅ 数据预处理完成，共 {} 个序列（耗时 {:.2}s）",
             tokenized_data.len(),
-            start_time.elapsed().as_secs_f32()
+            preprocess_start.elapsed().as_secs_f32()
+        );
+
+        if self.parallel_training && !should_parallel_preprocess {
+            println!("⚠️  样本数较少，tokenization 自动回退为单线程模式");
+        }
+
+        let use_parallel_gradients = self.parallel_training
+            && effective_accum_steps > 1
+            && tokenized_data.len() >= MIN_PARALLEL_GRAD;
+
+        println!(
+            "🧵 梯度归约模式: {} (accumulation_steps={})",
+            if use_parallel_gradients {
+                "rayon 并行"
+            } else if self.parallel_training {
+                "单线程（自动回退）"
+            } else {
+                "单线程（手动配置）"
+            },
+            effective_accum_steps
         );
 
         let mut early_stopping = EarlyStopping::new(patience, 0.01);
@@ -568,20 +627,33 @@ impl LLM {
         for epoch in 0..max_epochs {
             let epoch_start = std::time::Instant::now();
 
-            // 🔥 优化2：余弦退火学习率调度（禁用重启以提升稳定性）
+            // 🔥 余弦退火学习率调度（禁用重启以提升稳定性）
             let current_lr = Self::cosine_annealing_lr(initial_lr, epoch, max_epochs, 0);
 
             let mut total_loss = 0.0;
             let mut total_grad_norm = 0.0;
-            let mut sample_count = 0;
+            let mut sample_count = 0usize;
 
-            // 🔥 优化5：梯度累积相关变量（暂时禁用累积：steps=1 提升稳定性）
-            let mut accumulated_grads: Option<Array2<f32>> = None;
-            let mut step_count = 0;
+            let mut gradient_bucket: Vec<Array2<f32>> = Vec::with_capacity(effective_accum_steps);
+            let mut bucket_expected_len: Option<usize> = None;
 
-            for (idx, training_row) in tokenized_data.iter().enumerate() {
+            for training_row in &tokenized_data {
                 if training_row.len() < 2 {
                     continue;
+                }
+
+                let seq_len = training_row.len() - 1;
+
+                if let Some(expected) = bucket_expected_len {
+                    if expected != seq_len && !gradient_bucket.is_empty() {
+                        self.apply_accumulated_gradients(
+                            &mut gradient_bucket,
+                            current_lr,
+                            use_parallel_gradients,
+                            &mut perf_monitor,
+                        );
+                        bucket_expected_len = None;
+                    }
                 }
 
                 // 前向传播
@@ -598,76 +670,68 @@ impl LLM {
                 }
 
                 let logits = input;
-                // 使用 log_softmax + NLL 提升数值稳定性
                 let log_probs = log_softmax(&logits);
                 total_loss += Self::cross_entropy_from_log_probs(&log_probs, target_ids);
 
-                // 计算梯度但不立即更新：softmax(logits) - one_hot(target)
+                // 计算输出梯度
                 let probs = log_probs.mapv(|x| x.exp());
                 let mut grads_output = Self::compute_gradients_step(&probs, target_ids);
 
-                // 🔥 优化4：记录梯度范数（用于监控）
                 total_grad_norm += Self::compute_grad_norm(&grads_output);
 
-                // 更强的梯度裁剪提升稳定性
                 Self::clip_gradients(&mut grads_output, 1.0);
 
-                // 🔥 优化5：梯度累积逻辑（修复形状兼容性问题）
-                // 由于变长序列导致梯度形状不同，只在形状兼容时进行累积
-                if accumulated_grads.is_none() {
-                    accumulated_grads = Some(grads_output.clone());
-                    step_count += 1;
-                } else if let Some(ref mut acc_grads) = accumulated_grads {
-                    // 检查形状是否兼容
-                    if acc_grads.shape() == grads_output.shape() {
-                        *acc_grads = &*acc_grads + &grads_output;
-                        step_count += 1;
-                    } else {
-                        // 形状不兼容时，直接使用当前梯度更新参数并重置累积
-                        let mut current_grad = grads_output;
-                        for layer in self.network.iter_mut().rev() {
-                            current_grad = layer.backward(&current_grad, current_lr);
-                        }
-                        accumulated_grads = None;
-                        step_count = 0;
-                    }
-                }
+                bucket_expected_len.get_or_insert(seq_len);
+                gradient_bucket.push(grads_output);
 
-                // 每accumulation_steps步或最后一个样本时更新参数
-                // 每accumulation_steps步或最后一个样本时更新参数
-                let should_update =
-                    step_count >= accumulation_steps || idx == tokenized_data.len() - 1;
-
-                if should_update && accumulated_grads.is_some() {
-                    if let Some(mut acc_grads) = accumulated_grads.take() {
-                        // 平均梯度（重要！）
-                        acc_grads.mapv_inplace(|x| x / step_count as f32);
-
-                        // 反向传播更新参数
-                        let mut current_grad = acc_grads;
-                        for layer in self.network.iter_mut().rev() {
-                            current_grad = layer.backward(&current_grad, current_lr);
-                        }
-                    }
-
-                    step_count = 0;
+                if gradient_bucket.len() >= effective_accum_steps {
+                    self.apply_accumulated_gradients(
+                        &mut gradient_bucket,
+                        current_lr,
+                        use_parallel_gradients,
+                        &mut perf_monitor,
+                    );
+                    bucket_expected_len = None;
                 }
 
                 sample_count += 1;
             }
 
-            let epoch_time = epoch_start.elapsed().as_secs_f32();
-            let avg_loss = total_loss / sample_count as f32;
-            let avg_grad_norm = total_grad_norm / sample_count as f32;
-            let perplexity = avg_loss.exp();
-            let samples_per_sec = sample_count as f32 / epoch_time;
+            if !gradient_bucket.is_empty() {
+                self.apply_accumulated_gradients(
+                    &mut gradient_bucket,
+                    current_lr,
+                    use_parallel_gradients,
+                    &mut perf_monitor,
+                );
+            }
 
-            // 🔥 优化4：增强训练监控输出
+            let epoch_time = epoch_start.elapsed().as_secs_f32();
+            let avg_loss = if sample_count > 0 {
+                total_loss / sample_count as f32
+            } else {
+                0.0
+            };
+            let avg_grad_norm = if sample_count > 0 {
+                total_grad_norm / sample_count as f32
+            } else {
+                0.0
+            };
+            let perplexity = avg_loss.exp();
+            let samples_per_sec = if epoch_time > 0.0 {
+                sample_count as f32 / epoch_time
+            } else {
+                0.0
+            };
+
             if epoch % 10 == 0 || epoch == max_epochs - 1 {
                 let progress = (epoch + 1) as f32 / max_epochs as f32 * 100.0;
                 let elapsed = training_start_time.elapsed().as_secs();
-                let eta =
-                    (elapsed as f32 / (epoch + 1) as f32 * (max_epochs - epoch - 1) as f32) as u64;
+                let eta = if epoch + 1 > 0 {
+                    (elapsed as f32 / (epoch + 1) as f32 * (max_epochs - epoch - 1) as f32) as u64
+                } else {
+                    0
+                };
 
                 println!(
                     "[{:3}/{}] {:6.1}% | Loss: {:.4} | PPL: {:6.2} | LR: {:.6} | Grad: {:6.4} | Speed: {:5.1} samples/s | ETA: {}s",
@@ -683,7 +747,6 @@ impl LLM {
                 );
             }
 
-            // 🔥 优化3：早停机制检查（建议较短耐心，用于小数据集快速迭代）
             if early_stopping.should_stop(avg_loss, epoch) {
                 let (best_loss, best_epoch) = early_stopping.best_state();
                 println!("\n🛑 早停触发:");
@@ -693,11 +756,13 @@ impl LLM {
                 println!("   • 节省时间: {} epochs", max_epochs - epoch);
 
                 self.set_training_mode(false);
-                return epoch + 1; // 返回实际训练的epoch数
+                perf_monitor.print_report();
+                return epoch + 1;
             }
         }
 
         self.set_training_mode(false);
+        perf_monitor.print_report();
         max_epochs
     }
 
@@ -798,62 +863,56 @@ impl LLM {
         }
     }
 
-    pub fn tokenize(&self, text: &str) -> Vec<usize> {
-        // 使用 vocab 模块中的全局 Jieba 实例
-        // 不再每次调用都初始化 Jieba
-
-        // Check if the text contains Chinese characters
+    fn tokenize_with_vocab(vocab: &Vocab, text: &str) -> Vec<usize> {
         let has_chinese = text
             .chars()
             .any(|c| (c as u32) >= 0x4E00 && (c as u32) <= 0x9FFF);
 
+        if has_chinese {
+            return vocab.encode_sequence(text);
+        }
+
         let mut tokens = Vec::new();
 
-        if has_chinese {
-            // 使用 vocab 的 encode_sequence 方法，它内部使用全局 Jieba 实例
-            return self.vocab.encode_sequence(text);
-        } else {
-            // Use the original method for non-Chinese text
-            for word in text.split_whitespace() {
-                // Special case for end token
-                if word == "</s>" {
-                    if let Some(token_id) = self.vocab.encode(word) {
-                        tokens.push(token_id);
-                    }
-                    continue;
-                }
-
-                let mut current_word = String::new();
-
-                for c in word.chars() {
-                    if c.is_ascii_punctuation() {
-                        // If we have a word before the punctuation, add it
-                        if !current_word.is_empty() {
-                            if let Some(token_id) = self.vocab.encode(&current_word) {
-                                tokens.push(token_id);
-                            }
-                            current_word.clear();
-                        }
-
-                        // Add the punctuation as its own token
-                        if let Some(token_id) = self.vocab.encode(&c.to_string()) {
-                            tokens.push(token_id);
-                        }
-                    } else {
-                        current_word.push(c);
-                    }
-                }
-
-                // Add any remaining word
-                if !current_word.is_empty()
-                    && let Some(token_id) = self.vocab.encode(&current_word)
-                {
+        for word in text.split_whitespace() {
+            if word == "</s>" {
+                if let Some(token_id) = vocab.encode(word) {
                     tokens.push(token_id);
                 }
+                continue;
+            }
+
+            let mut current_word = String::new();
+
+            for c in word.chars() {
+                if c.is_ascii_punctuation() {
+                    if !current_word.is_empty() {
+                        if let Some(token_id) = vocab.encode(&current_word) {
+                            tokens.push(token_id);
+                        }
+                        current_word.clear();
+                    }
+
+                    if let Some(token_id) = vocab.encode(&c.to_string()) {
+                        tokens.push(token_id);
+                    }
+                } else {
+                    current_word.push(c);
+                }
+            }
+
+            if !current_word.is_empty()
+                && let Some(token_id) = vocab.encode(&current_word)
+            {
+                tokens.push(token_id);
             }
         }
 
         tokens
+    }
+
+    pub fn tokenize(&self, text: &str) -> Vec<usize> {
+        Self::tokenize_with_vocab(&self.vocab, text)
     }
 
     fn apply_temperature(probs: &Array2<f32>, temperature: f32) -> Array2<f32> {
@@ -1254,5 +1313,88 @@ impl LLM {
             let scale = max_norm / norm;
             grads.mapv_inplace(|x| x * scale);
         }
+    }
+
+    fn apply_accumulated_gradients(
+        &mut self,
+        gradient_bucket: &mut Vec<Array2<f32>>,
+        current_lr: f32,
+        use_parallel: bool,
+        perf_monitor: &mut PerformanceMonitor,
+    ) {
+        if gradient_bucket.is_empty() {
+            return;
+        }
+
+        let label = if use_parallel && gradient_bucket.len() > 1 {
+            "梯度累积(并行归约)"
+        } else {
+            "梯度累积(单线程归约)"
+        };
+
+        perf_monitor.start(label);
+        let aggregated = if use_parallel && gradient_bucket.len() > 1 {
+            Self::aggregate_gradients_parallel(gradient_bucket.as_slice())
+        } else {
+            Self::aggregate_gradients_sequential(gradient_bucket.as_slice())
+        };
+        perf_monitor.stop(label);
+
+        gradient_bucket.clear();
+
+        let mut current_grad = aggregated;
+        for layer in self.network.iter_mut().rev() {
+            current_grad = layer.backward(&current_grad, current_lr);
+        }
+    }
+
+    fn aggregate_gradients_sequential(gradients: &[Array2<f32>]) -> Array2<f32> {
+        if gradients.is_empty() {
+            return Array2::zeros((0, 0));
+        }
+
+        let mut acc = gradients[0].clone();
+        for grad in &gradients[1..] {
+            acc += grad;
+        }
+        acc.mapv_inplace(|x| x / gradients.len() as f32);
+        acc
+    }
+
+    fn aggregate_gradients_parallel(gradients: &[Array2<f32>]) -> Array2<f32> {
+        if gradients.is_empty() {
+            return Array2::zeros((0, 0));
+        }
+        if gradients.len() == 1 {
+            return gradients[0].clone();
+        }
+
+        let (rows, cols) = gradients[0].dim();
+        let shared = Arc::new(Mutex::new(Array2::<f32>::zeros((rows, cols))));
+
+        let threads = rayon::current_num_threads().max(1);
+        let chunk_size = ((gradients.len() + threads - 1) / threads).max(1);
+
+        scope(|scope| {
+            for chunk in gradients.chunks(chunk_size) {
+                let shared = Arc::clone(&shared);
+                scope.spawn(move |_| {
+                    let mut local = Array2::<f32>::zeros((rows, cols));
+                    for grad in chunk {
+                        local += grad;
+                    }
+                    let mut guard = shared.lock().expect("gradient mutex poisoned");
+                    *guard += &local;
+                });
+            }
+        });
+
+        let mut aggregated = Arc::try_unwrap(shared)
+            .expect("gradient accumulator still has multiple owners")
+            .into_inner()
+            .expect("gradient accumulator mutex poisoned");
+
+        aggregated.mapv_inplace(|x| x / gradients.len() as f32);
+        aggregated
     }
 }
