@@ -9,13 +9,7 @@ use crate::{
     output_projection::OutputProjection,
     transformer::TransformerBlock,
     utils::{log_softmax, softmax},
-    Embeddings,
-    PerformanceMonitor,
-    Vocab,
-    EMBEDDING_DIM,
-    HIDDEN_DIM,
-    MAX_SEQ_LEN,
-    SOFTMAX_EPSILON,
+    Embeddings, PerformanceMonitor, Vocab, EMBEDDING_DIM, HIDDEN_DIM, MAX_SEQ_LEN, SOFTMAX_EPSILON,
 };
 pub trait Layer {
     fn layer_type(&self) -> &str;
@@ -640,8 +634,7 @@ impl LLM {
             let mut total_grad_norm = 0.0;
             let mut sample_count = 0usize;
 
-            let mut gradient_bucket: Vec<Array2<f32>> =
-                Vec::with_capacity(effective_accum_steps);
+            let mut gradient_bucket: Vec<Array2<f32>> = Vec::with_capacity(effective_accum_steps);
             let mut bucket_expected_len: Option<usize> = None;
 
             for training_row in &tokenized_data {
@@ -711,7 +704,6 @@ impl LLM {
                     use_parallel_gradients,
                     &mut perf_monitor,
                 );
-                bucket_expected_len = None;
             }
 
             let epoch_time = epoch_start.elapsed().as_secs_f32();
@@ -736,8 +728,7 @@ impl LLM {
                 let progress = (epoch + 1) as f32 / max_epochs as f32 * 100.0;
                 let elapsed = training_start_time.elapsed().as_secs();
                 let eta = if epoch + 1 > 0 {
-                    (elapsed as f32 / (epoch + 1) as f32 * (max_epochs - epoch - 1) as f32)
-                        as u64
+                    (elapsed as f32 / (epoch + 1) as f32 * (max_epochs - epoch - 1) as f32) as u64
                 } else {
                     0
                 };

@@ -37,7 +37,6 @@
 //! - 这种设计有助于模型学习抽象的、压缩的特征表示
 
 use ndarray::{Array2, Axis};
-use ndarray::parallel::prelude::*;
 use rand::Rng;
 use rand_distr::{Distribution, Normal};
 

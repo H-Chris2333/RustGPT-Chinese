@@ -47,7 +47,6 @@
 //! ```
 
 use ndarray::{Array2, Zip};
-use ndarray::parallel::prelude::*;
 use rand::Rng;
 use rand_distr::{Distribution, Normal};
 
@@ -167,7 +166,7 @@ impl Embeddings {
             })
             .collect();
 
-        Zip::indexed(&mut token_embeds).par_apply(|(i, j), value| {
+        Zip::indexed(&mut token_embeds).par_for_each(|(i, j), value| {
             *value = embeddings[[safe_ids[i], j]];
         });
 
@@ -212,7 +211,7 @@ impl Embeddings {
 
         // 步骤 2：生成位置编码矩阵
         let mut position_embeds = Array2::<f32>::zeros((token_ids.len(), EMBEDDING_DIM));
-        Zip::indexed(&mut position_embeds).par_apply(|(i, j), value| {
+        Zip::indexed(&mut position_embeds).par_for_each(|(i, j), value| {
             *value = self.position_encoder.get_encoding(i, j);
         });
 

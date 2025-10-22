@@ -637,6 +637,7 @@ pub fn load_model_binary<P: AsRef<Path>>(path: P) -> Result<LLM, Box<dyn std::er
         context_window: serializable_model.context_window,
         max_context_length: serializable_model.metadata.max_seq_len,
         training: false,
+        parallel_training: true,
     };
 
     println!("✅ 模型加载成功!");
@@ -725,6 +726,7 @@ pub fn load_model_json<P: AsRef<Path>>(path: P) -> Result<LLM, Box<dyn std::erro
         context_window: serializable_model.context_window,
         max_context_length: serializable_model.metadata.max_seq_len,
         training: false,
+        parallel_training: true,
     };
 
     println!("✅ 模型加载成功!");
