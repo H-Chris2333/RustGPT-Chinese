@@ -70,7 +70,8 @@
 
 use std::f32;
 
-use ndarray::{Array2, Axis, s};
+use ndarray::{Array2, Axis, Zip, s};
+use ndarray::parallel::prelude::*;
 use rand::Rng;
 use rand_distr::{Distribution, Normal};
 
@@ -314,7 +315,6 @@ impl SelfAttention {
     /// - `output`: 注意力输出 (seq_len, head_dim)
     /// - `weights`: 注意力权重 (seq_len, seq_len)，用于反向传播
     fn attention(
-        &self,
         q: &Array2<f32>,
         k: &Array2<f32>,
         v: &Array2<f32>,
@@ -384,20 +384,14 @@ impl SelfAttention {
         // 预分配结果矩阵
         let mut result = Array2::zeros((seq_len * self.num_heads, self.head_dim));
 
-        // 优化的重排逻辑：减少内存访问次数
-        for seq_idx in 0..seq_len {
-            let row = x.row(seq_idx);
-            for head_idx in 0..self.num_heads {
-                let start_dim = head_idx * self.head_dim;
-                let end_dim = start_dim + self.head_dim;
-                let result_row_idx = seq_idx * self.num_heads + head_idx;
+        Zip::indexed(result.rows_mut()).par_apply(|(row_idx,), mut row| {
+            let seq_idx = row_idx / self.num_heads;
+            let head_idx = row_idx % self.num_heads;
+            let start_dim = head_idx * self.head_dim;
+            let end_dim = start_dim + self.head_dim;
 
-                // 使用切片赋值，比逐元素复制更高效
-                result
-                    .row_mut(result_row_idx)
-                    .assign(&row.slice(s![start_dim..end_dim]));
-            }
-        }
+            row.assign(&x.slice(s![seq_idx, start_dim..end_dim]));
+        });
 
         result
     }
@@ -429,19 +423,17 @@ impl SelfAttention {
 
         let mut result = Array2::zeros((seq_len, self.num_heads * self.head_dim));
 
-        // 优化的反向重排逻辑
-        for seq_idx in 0..seq_len {
+        Zip::indexed(result.rows_mut()).par_apply(|(seq_idx,), mut row| {
             for head_idx in 0..self.num_heads {
                 let src_row_idx = seq_idx * self.num_heads + head_idx;
                 let dst_start = head_idx * self.head_dim;
                 let dst_end = dst_start + self.head_dim;
 
-                // 使用切片赋值
-                result
-                    .slice_mut(s![seq_idx, dst_start..dst_end])
+                row
+                    .slice_mut(s![dst_start..dst_end])
                     .assign(&x.row(src_row_idx));
             }
-        }
+        });
 
         result
     }
@@ -475,27 +467,31 @@ impl SelfAttention {
         let v_heads = self.reshape_for_heads(&v);
 
         // 3. 对每个头计算注意力
+        let head_outputs: Vec<Array2<f32>> = (0..self.num_heads)
+            .into_par_iter()
+            .map(|head| {
+                let q_head = q_heads
+                    .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
+                    .to_owned();
+                let k_head = k_heads
+                    .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
+                    .to_owned();
+                let v_head = v_heads
+                    .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
+                    .to_owned();
+
+                let (head_output, _head_weights) = Self::attention(&q_head, &k_head, &v_head);
+                head_output
+            })
+            .collect();
+
         let mut result = Array2::zeros((seq_len * self.num_heads, self.head_dim));
-
-        for head in 0..self.num_heads {
-            let q_head = q_heads
-                .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
-                .to_owned();
-            let k_head = k_heads
-                .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
-                .to_owned();
-            let v_head = v_heads
-                .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
-                .to_owned();
-
-            let (head_output, _head_weights) = self.attention(&q_head, &k_head, &v_head);
-
-            for i in 0..seq_len {
-                for j in 0..self.head_dim {
-                    result[[i * self.num_heads + head, j]] = head_output[[i, j]];
-                }
-            }
-        }
+        let head_outputs_ref = &head_outputs;
+        Zip::indexed(result.rows_mut()).par_apply(|(row_idx,), mut row| {
+            let seq_idx = row_idx / self.num_heads;
+            let head_idx = row_idx % self.num_heads;
+            row.assign(&head_outputs_ref[head_idx].row(seq_idx));
+        });
 
         // 4. 合并所有头
         let combined = self.reverse_reshape_from_heads(&result);
@@ -582,23 +578,27 @@ impl SelfAttention {
         let v_heads = self.reshape_for_heads(&v_all);
 
         // 5. 对每个头计算注意力
+        let head_outputs: Vec<Array2<f32>> = (0..self.num_heads)
+            .into_par_iter()
+            .map(|head| {
+                let q_head = q_heads
+                    .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
+                    .to_owned();
+                let k_head = k_heads.slice(s![head..; self.num_heads, ..]).to_owned();
+                let v_head = v_heads.slice(s![head..; self.num_heads, ..]).to_owned();
+
+                let (head_output, _head_weights) = Self::attention(&q_head, &k_head, &v_head);
+                head_output
+            })
+            .collect();
+
         let mut result = Array2::zeros((seq_len * self.num_heads, self.head_dim));
-
-        for head in 0..self.num_heads {
-            let q_head = q_heads
-                .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
-                .to_owned();
-            let k_head = k_heads.slice(s![head..; self.num_heads, ..]).to_owned();
-            let v_head = v_heads.slice(s![head..; self.num_heads, ..]).to_owned();
-
-            let (head_output, _head_weights) = self.attention(&q_head, &k_head, &v_head);
-
-            for i in 0..seq_len {
-                for j in 0..self.head_dim {
-                    result[[i * self.num_heads + head, j]] = head_output[[i, j]];
-                }
-            }
-        }
+        let head_outputs_ref = &head_outputs;
+        Zip::indexed(result.rows_mut()).par_apply(|(row_idx,), mut row| {
+            let seq_idx = row_idx / self.num_heads;
+            let head_idx = row_idx % self.num_heads;
+            row.assign(&head_outputs_ref[head_idx].row(seq_idx));
+        });
 
         // 6. 合并所有头
         let combined = self.reverse_reshape_from_heads(&result);

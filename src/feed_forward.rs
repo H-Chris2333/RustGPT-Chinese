@@ -37,6 +37,7 @@
 //! - 这种设计有助于模型学习抽象的、压缩的特征表示
 
 use ndarray::{Array2, Axis};
+use ndarray::parallel::prelude::*;
 use rand::Rng;
 use rand_distr::{Distribution, Normal};
 
@@ -203,7 +204,10 @@ impl Layer for FeedForward {
 
         // ========== 反向传播 ReLU 激活函数 ==========
         // ReLU 的导数：x > 0 ? 1 : 0
-        let relu_grad = hidden_pre_activation.mapv(|x| if x > 0.0 { 1.0 } else { 0.0 });
+        let mut relu_grad = hidden_pre_activation.clone();
+        relu_grad.par_map_inplace(|x| {
+            *x = if *x > 0.0 { 1.0 } else { 0.0 };
+        });
 
         // grad_h = grad_h_activated * ReLU'(h) (逐元素相乘)
         let grad_hidden_pre_activation = grad_hidden_post_activation * relu_grad;
@@ -250,7 +254,10 @@ impl Layer for FeedForward {
         let hidden_pre_activation = input.dot(&self.w1) + &self.b1;
 
         // ReLU 激活：max(0, x)
-        let hidden_post_activation = hidden_pre_activation.mapv(|x| x.max(0.0));
+        let mut hidden_post_activation = hidden_pre_activation.clone();
+        hidden_post_activation.par_map_inplace(|x| {
+            *x = x.max(0.0);
+        });
 
         // 第二层：线性变换到输出
         let output = hidden_post_activation.dot(&self.w2) + &self.b2;

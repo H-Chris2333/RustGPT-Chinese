@@ -46,7 +46,8 @@
 //! final_embedding = [0.24, -0.42, 0.65, ...]  // 逐元素相加
 //! ```
 
-use ndarray::Array2;
+use ndarray::{Array2, Zip};
+use ndarray::parallel::prelude::*;
 use rand::Rng;
 use rand_distr::{Distribution, Normal};
 
@@ -149,20 +150,27 @@ impl Embeddings {
     /// ```
     fn get_token_embeddings(embeddings: &Array2<f32>, token_ids: &[usize]) -> Array2<f32> {
         let mut token_embeds = Array2::<f32>::zeros((token_ids.len(), embeddings.ncols()));
-        for (i, &token_id) in token_ids.iter().enumerate() {
-            let safe_id = if token_id >= embeddings.nrows() {
-                log::warn!(
-                    "Token ID {} 越界（词表大小: {}），将使用最后一个可用ID作为回退",
-                    token_id,
-                    embeddings.nrows()
-                );
-                embeddings.nrows().saturating_sub(1)
-            } else {
-                token_id
-            };
-            // 复制嵌入矩阵的第 safe_id 行到输出的第 i 行
-            token_embeds.row_mut(i).assign(&embeddings.row(safe_id));
-        }
+
+        let safe_ids: Vec<usize> = token_ids
+            .iter()
+            .map(|&token_id| {
+                if token_id >= embeddings.nrows() {
+                    log::warn!(
+                        "Token ID {} 越界（词表大小: {}），将使用最后一个可用ID作为回退",
+                        token_id,
+                        embeddings.nrows()
+                    );
+                    embeddings.nrows().saturating_sub(1)
+                } else {
+                    token_id
+                }
+            })
+            .collect();
+
+        Zip::indexed(&mut token_embeds).par_apply(|(i, j), value| {
+            *value = embeddings[[safe_ids[i], j]];
+        });
+
         token_embeds
     }
 
@@ -204,11 +212,9 @@ impl Embeddings {
 
         // 步骤 2：生成位置编码矩阵
         let mut position_embeds = Array2::<f32>::zeros((token_ids.len(), EMBEDDING_DIM));
-        for (i, _) in token_ids.iter().enumerate() {
-            for j in 0..EMBEDDING_DIM {
-                position_embeds[[i, j]] = self.position_encoder.get_encoding(i, j);
-            }
-        }
+        Zip::indexed(&mut position_embeds).par_apply(|(i, j), value| {
+            *value = self.position_encoder.get_encoding(i, j);
+        });
 
         // 步骤 3：逐元素相加
         token_embeds + position_embeds
