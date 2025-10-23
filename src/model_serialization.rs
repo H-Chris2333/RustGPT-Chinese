@@ -254,6 +254,7 @@ impl SerializableLayer {
             position_encoder: PositionEncoding::new(),
             cached_input: None,
             token_optimizer: s.token_optimizer.to_adam(),
+            position_cache: Array2::<f32>::zeros((crate::MAX_SEQ_LEN, crate::EMBEDDING_DIM)),
         }
     }
 
@@ -631,6 +632,7 @@ pub fn load_model_binary<P: AsRef<Path>>(path: P) -> Result<LLM, Box<dyn std::er
         println!(" ✓");
     }
 
+    let vocab_size = serializable_model.vocab.words.len();
     let llm = LLM {
         vocab: serializable_model.vocab,
         network,
@@ -638,6 +640,9 @@ pub fn load_model_binary<P: AsRef<Path>>(path: P) -> Result<LLM, Box<dyn std::er
         max_context_length: serializable_model.metadata.max_seq_len,
         training: false,
         parallel_training: true,
+        sampling_prob_buffer: Vec::with_capacity(vocab_size),
+        sampling_idx_buffer: Vec::with_capacity(vocab_size),
+        beam_candidates_buffer: Vec::with_capacity(50),
     };
 
     println!("✅ 模型加载成功!");
@@ -720,6 +725,7 @@ pub fn load_model_json<P: AsRef<Path>>(path: P) -> Result<LLM, Box<dyn std::erro
         println!(" ✓");
     }
 
+    let vocab_size = serializable_model.vocab.words.len();
     let llm = LLM {
         vocab: serializable_model.vocab,
         network,
@@ -727,6 +733,9 @@ pub fn load_model_json<P: AsRef<Path>>(path: P) -> Result<LLM, Box<dyn std::erro
         max_context_length: serializable_model.metadata.max_seq_len,
         training: false,
         parallel_training: true,
+        sampling_prob_buffer: Vec::with_capacity(vocab_size),
+        sampling_idx_buffer: Vec::with_capacity(vocab_size),
+        beam_candidates_buffer: Vec::with_capacity(50),
     };
 
     println!("✅ 模型加载成功!");

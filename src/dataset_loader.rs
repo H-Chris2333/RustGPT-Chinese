@@ -20,23 +20,19 @@ impl Dataset {
         chat_training_data_path: String,
         type_of_data: DatasetType,
     ) -> Self {
-        let pretraining_data: Vec<String>;
-        let chat_training_data: Vec<String>;
+        let pretraining_data = match type_of_data {
+            DatasetType::CSV => get_data_from_csv(pretraining_data_path.clone()),
+            DatasetType::JSON => get_data_from_json(pretraining_data_path.clone()),
+        };
 
-        match type_of_data {
-            DatasetType::CSV => {
-                pretraining_data = get_data_from_csv(pretraining_data_path);
-                chat_training_data = get_data_from_csv(chat_training_data_path);
-            }
-            DatasetType::JSON => {
-                pretraining_data = get_data_from_json(pretraining_data_path);
-                chat_training_data = get_data_from_json(chat_training_data_path);
-            }
-        }
+        let chat_training_data = match type_of_data {
+            DatasetType::CSV => get_data_from_csv(chat_training_data_path),
+            DatasetType::JSON => get_data_from_json(chat_training_data_path),
+        };
 
         Dataset {
-            pretraining_data: pretraining_data.clone(),
-            chat_training_data: chat_training_data.clone(),
+            pretraining_data,
+            chat_training_data,
         }
     }
 }
