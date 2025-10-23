@@ -47,10 +47,11 @@
 //! ```
 
 use ndarray::{Array2, Zip};
-use rand::Rng;
-use rand_distr::{Distribution, Normal};
 
-use crate::{EMBEDDING_DIM, adam::Adam, llm::Layer, position_encoding::PositionEncoding, vocab::Vocab};
+use crate::{
+    EMBEDDING_DIM, adam::Adam, llm::Layer, position_encoding::PositionEncoding,
+    utils::sample_normal, vocab::Vocab,
+};
 
 /// **嵌入层结构体**
 ///
@@ -134,14 +135,9 @@ impl Embeddings {
     /// - 0.02 是经验值，在多数情况下效果良好
     fn init_embeddings(vocab_size: usize, embedding_dim: usize) -> Array2<f32> {
         let mut rng = rand::rng();
-        if let Ok(normal) = Normal::new(0.0, 0.02) {
-            Array2::from_shape_fn((vocab_size, embedding_dim), |_| normal.sample(&mut rng))
-        } else {
-            log::warn!("正态分布初始化失败，改用均匀分布初始化嵌入权重");
-            Array2::from_shape_fn((vocab_size, embedding_dim), |_| {
-                rng.random_range(-0.02..0.02)
-            })
-        }
+        Array2::from_shape_fn((vocab_size, embedding_dim), |_| {
+            sample_normal(&mut rng, 0.0, 0.02)
+        })
     }
 
     /// **根据 token ID 获取对应的嵌入向量**
@@ -173,7 +169,7 @@ impl Embeddings {
             })
             .collect();
 
-        Zip::indexed(&mut token_embeds).par_for_each(|(i, j), value| {
+        Zip::indexed(&mut token_embeds).for_each(|(i, j), value| {
             *value = embeddings[[safe_ids[i], j]];
         });
 

@@ -89,11 +89,8 @@ use std::f32;
 use std::collections::HashMap;
 
 use ndarray::{Array2, Axis, s};
-use ndarray::parallel::prelude::*;
-use rand::Rng;
-use rand_distr::{Distribution, Normal};
 
-use crate::{EMBEDDING_DIM, adam::Adam, llm::Layer};
+use crate::{EMBEDDING_DIM, adam::Adam, llm::Layer, utils::sample_normal};
 
 /// **稳定的 Softmax 实现（使用 log-sum-exp 技巧）**
 ///
@@ -259,40 +256,22 @@ impl SelfAttention {
 
         // He 初始化：std = sqrt(2 / fan_in)
         let std = (2.0 / embedding_dim as f32).sqrt();
-        let normal_ok = Normal::new(0.0, std).ok();
 
-        let w_q = if let Some(normal) = normal_ok.clone() {
-            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| normal.sample(&mut rng))
-        } else {
-            log::warn!("SelfAttention: 正态分布初始化失败，W_q改用均匀分布");
-            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| {
-                rng.random_range(-std..std)
-            })
-        };
-        let w_k = if let Some(normal) = normal_ok.clone() {
-            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| normal.sample(&mut rng))
-        } else {
-            log::warn!("SelfAttention: 正态分布初始化失败，W_k改用均匀分布");
-            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| {
-                rng.random_range(-std..std)
-            })
-        };
-        let w_v = if let Some(normal) = normal_ok.clone() {
-            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| normal.sample(&mut rng))
-        } else {
-            log::warn!("SelfAttention: 正态分布初始化失败，W_v改用均匀分布");
-            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| {
-                rng.random_range(-std..std)
-            })
-        };
-        let w_o = if let Some(normal) = normal_ok {
-            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| normal.sample(&mut rng))
-        } else {
-            log::warn!("SelfAttention: 正态分布初始化失败，W_o改用均匀分布");
-            Array2::from_shape_fn((embedding_dim, embedding_dim), |_| {
-                rng.random_range(-std..std)
-            })
-        };
+        let w_q = Array2::from_shape_fn((embedding_dim, embedding_dim), |_| {
+            sample_normal(&mut rng, 0.0, std)
+        });
+
+        let w_k = Array2::from_shape_fn((embedding_dim, embedding_dim), |_| {
+            sample_normal(&mut rng, 0.0, std)
+        });
+
+        let w_v = Array2::from_shape_fn((embedding_dim, embedding_dim), |_| {
+            sample_normal(&mut rng, 0.0, std)
+        });
+
+        let w_o = Array2::from_shape_fn((embedding_dim, embedding_dim), |_| {
+            sample_normal(&mut rng, 0.0, std)
+        });
 
         SelfAttention {
             embedding_dim,
@@ -588,9 +567,8 @@ impl SelfAttention {
         let k_heads = self.reshape_for_heads(&k);
         let v_heads = self.reshape_for_heads(&v);
 
-        // 4. 对每个头计算注意力（并行处理，使用缓存掩码）
+        // 4. 对每个头计算注意力（使用缓存掩码）
         let head_outputs: Vec<Array2<f32>> = (0..self.num_heads)
-            .into_par_iter()
             .map(|head| {
                 let q_head = q_heads
                     .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
@@ -703,7 +681,6 @@ impl SelfAttention {
 
         // 5. 对每个头计算注意力
         let head_outputs: Vec<Array2<f32>> = (0..self.num_heads)
-            .into_par_iter()
             .map(|head| {
                 let q_head = q_heads
                     .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])

@@ -2,6 +2,7 @@
 ///
 /// 包含数学运算、激活函数等通用工具
 use ndarray::Array2;
+use rand::Rng;
 
 // Softmax专用的epsilon常量（避免除零）
 const SOFTMAX_EPS: f32 = 1e-12;
@@ -63,6 +64,25 @@ pub fn log_softmax(logits: &Array2<f32>) -> Array2<f32> {
     }
 
     result
+}
+
+/// 简单的正态分布采样实现（使用Box-Muller变换）
+///
+/// 替代 rand_distr，减少依赖。生成均值为mean、标准差为std_dev的正态分布随机数。
+///
+/// # 参数
+/// - `rng`: 随机数生成器
+/// - `mean`: 均值
+/// - `std_dev`: 标准差
+///
+/// # 返回
+/// 正态分布采样值
+pub fn sample_normal<R: Rng>(rng: &mut R, mean: f32, std_dev: f32) -> f32 {
+    // Box-Muller 变换
+    let u1: f32 = rng.random();
+    let u2: f32 = rng.random();
+    let z0 = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f32::consts::PI * u2).cos();
+    mean + std_dev * z0
 }
 
 #[cfg(test)]
