@@ -24,6 +24,7 @@ fn test_dataset_new_json() {
     assert!(dataset.chat_training_data[0].starts_with("User: 什么是雨？"));
 }
 
+#[cfg(feature = "csv-support")]
 #[test]
 fn test_dataset_new_csv() {
     // Prepare test CSV files with minimal data
@@ -60,4 +61,22 @@ fn test_dataset_new_csv() {
     // Clean up test files
     let _ = std::fs::remove_file(pretraining_csv);
     let _ = std::fs::remove_file(chat_csv);
+}
+
+#[cfg(not(feature = "csv-support"))]
+#[test]
+fn test_dataset_new_csv_feature_disabled() {
+    let dataset = Dataset::new(
+        "data/pretraining_data_test.csv".to_string(),
+        "data/chat_training_data_test.csv".to_string(),
+        DatasetType::CSV,
+    );
+    assert!(
+        dataset.pretraining_data.is_empty(),
+        "CSV data should be empty when the 'csv-support' feature is disabled"
+    );
+    assert!(
+        dataset.chat_training_data.is_empty(),
+        "CSV data should be empty when the 'csv-support' feature is disabled"
+    );
 }
