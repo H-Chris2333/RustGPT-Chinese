@@ -324,7 +324,6 @@ impl SerializableLayer {
             cached_q: None,
             cached_k: None,
             cached_v: None,
-            cached_attention_scores: None,
             cached_attention_weights: None,
             cached_attention_output: None,
             kv_cache: None,      // KV缓存初始化为None
