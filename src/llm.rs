@@ -1,9 +1,7 @@
 use std::cmp::Ordering;
-use std::sync::{Arc, Mutex};
 
 use ndarray::{Array1, Array2, Axis};
 use rand::{rng, Rng};
-use rayon::{prelude::*, scope};
 
 use crate::{
     output_projection::OutputProjection,
@@ -596,15 +594,10 @@ impl LLM {
         };
 
         perf_monitor.start(preprocess_label);
-        let tokenized_data: Vec<Vec<usize>> = if should_parallel_preprocess {
-            data.par_iter()
-                .map(|input| Self::tokenize_with_vocab(&self.vocab, input))
-                .collect()
-        } else {
-            data.iter()
-                .map(|input| Self::tokenize_with_vocab(&self.vocab, input))
-                .collect()
-        };
+        let tokenized_data: Vec<Vec<usize>> = data
+            .iter()
+            .map(|input| Self::tokenize_with_vocab(&self.vocab, input))
+            .collect();
         perf_monitor.stop(preprocess_label);
 
         println!(
@@ -1391,39 +1384,7 @@ impl LLM {
     }
 
     fn aggregate_gradients_parallel(gradients: &[Array2<f32>]) -> Array2<f32> {
-        if gradients.is_empty() {
-            return Array2::zeros((0, 0));
-        }
-        if gradients.len() == 1 {
-            return gradients[0].clone();
-        }
-
-        let (rows, cols) = gradients[0].dim();
-        let shared = Arc::new(Mutex::new(Array2::<f32>::zeros((rows, cols))));
-
-        let threads = rayon::current_num_threads().max(1);
-        let chunk_size = ((gradients.len() + threads - 1) / threads).max(1);
-
-        scope(|scope| {
-            for chunk in gradients.chunks(chunk_size) {
-                let shared = Arc::clone(&shared);
-                scope.spawn(move |_| {
-                    let mut local = Array2::<f32>::zeros((rows, cols));
-                    for grad in chunk {
-                        local += grad;
-                    }
-                    let mut guard = shared.lock().expect("gradient mutex poisoned");
-                    *guard += &local;
-                });
-            }
-        });
-
-        let mut aggregated = Arc::try_unwrap(shared)
-            .expect("gradient accumulator still has multiple owners")
-            .into_inner()
-            .expect("gradient accumulator mutex poisoned");
-
-        aggregated.mapv_inplace(|x| x / gradients.len() as f32);
-        aggregated
+        // 简化实现：对于小模型，串行聚合性能足够好
+        Self::aggregate_gradients_sequential(gradients)
     }
 }
