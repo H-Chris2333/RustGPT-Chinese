@@ -7,7 +7,8 @@ use crate::{
     output_projection::OutputProjection,
     transformer::TransformerBlock,
     utils::{log_softmax, softmax},
-    Embeddings, PerformanceMonitor, Vocab, EMBEDDING_DIM, HIDDEN_DIM, MAX_SEQ_LEN, SOFTMAX_EPSILON,
+    Embeddings, PerformanceMonitor, Vocab, EMBEDDING_DIM, HIDDEN_DIM, MAX_INFERENCE_SEQ_LEN,
+    MAX_SEQ_LEN, SOFTMAX_EPSILON,
 };
 pub trait Layer {
     fn layer_type(&self) -> &str;
@@ -18,6 +19,14 @@ pub trait Layer {
 
     fn parameters(&self) -> usize;
 
+    fn forward_inference(&mut self, input: &Array2<f32>) -> Array2<f32> {
+        self.forward(input)
+    }
+
+    fn reset_inference_cache(&mut self) {}
+
+    fn set_inference_cache_limit(&mut self, _max_len: usize) {}
+
     fn set_training_mode(&mut self, _training: bool) {}
 }
 
@@ -27,6 +36,7 @@ pub struct LLM {
     pub network: Vec<Box<dyn Layer>>,
     pub context_window: Vec<usize>,
     pub max_context_length: usize,
+    pub inference_cache_limit: usize,
     pub training: bool,
     pub parallel_training: bool,
     // 性能优化：可重用的采样缓冲区（public以便序列化）
@@ -116,6 +126,7 @@ impl Default for LLM {
             ],
             context_window: Vec::new(),
             max_context_length: MAX_SEQ_LEN,
+            inference_cache_limit: MAX_INFERENCE_SEQ_LEN,
             training: true,
             parallel_training: true,
             sampling_prob_buffer: Vec::with_capacity(vocab_size),
@@ -133,6 +144,7 @@ impl LLM {
             network,
             context_window: Vec::new(),
             max_context_length: MAX_SEQ_LEN,
+            inference_cache_limit: MAX_INFERENCE_SEQ_LEN,
             training: true,
             parallel_training: true,
             sampling_prob_buffer: Vec::with_capacity(vocab_size),
@@ -173,6 +185,42 @@ impl LLM {
         self.parallel_training
     }
 
+    fn reset_inference_caches(&mut self) {
+        for layer in &mut self.network {
+            layer.reset_inference_cache();
+        }
+    }
+
+    fn set_inference_cache_limit_all(&mut self, max_len: usize) {
+        let limit = max_len.max(1);
+        self.inference_cache_limit = limit;
+        for layer in &mut self.network {
+            layer.set_inference_cache_limit(limit);
+        }
+    }
+
+    fn prepare_inference(&mut self, prompt_len: usize) {
+        self.set_training_mode(false);
+        self.set_inference_cache_limit_all(self.inference_cache_limit.max(prompt_len));
+        self.reset_inference_caches();
+    }
+
+    fn forward_tokens_inference(&mut self, tokens: &[usize]) -> Array2<f32> {
+        if tokens.is_empty() {
+            return Array2::zeros((0, 0));
+        }
+
+        let input_vec: Vec<f32> = tokens.iter().map(|&x| x as f32).collect();
+        let mut current =
+            Array2::from_shape_vec((1, tokens.len()), input_vec).expect("invalid inference input");
+
+        for layer in &mut self.network {
+            current = layer.forward_inference(&current);
+        }
+
+        current
+    }
+
     #[allow(dead_code)]
     pub fn predict(&mut self, text: &str) -> String {
         self.predict_with_sampling(text, 1.0, 0.9, 5)
@@ -209,6 +257,11 @@ impl LLM {
             all_tokens = all_tokens[start_idx..].to_vec();
         }
 
+        if all_tokens.len() > self.inference_cache_limit {
+            let start_idx = all_tokens.len() - self.inference_cache_limit;
+            all_tokens = all_tokens[start_idx..].to_vec();
+        }
+
         let result = self.generate_with_context(&all_tokens, temperature, top_p, top_k);
 
         self.add_to_context(&new_tokens);
@@ -242,42 +295,35 @@ impl LLM {
             return String::new();
         }
 
+        if tokenized.len() > self.inference_cache_limit {
+            let start_idx = tokenized.len() - self.inference_cache_limit;
+            tokenized = tokenized[start_idx..].to_vec();
+        }
+
         let input_len = tokenized.len();
 
         if input_len >= MAX_SEQ_LEN {
             return String::new();
         }
 
+        self.prepare_inference(tokenized.len());
+        let mut logits = self.forward_tokens_inference(&tokenized);
+        let eos_token = self
+            .vocab
+            .encode("</s>")
+            .unwrap_or(self.vocab.eos_token_id());
+
         for _ in 0..(MAX_SEQ_LEN - input_len) {
-            let token_input = match Array2::from_shape_vec(
-                (1, tokenized.len()),
-                tokenized.iter().map(|&x| x as f32).collect(),
-            ) {
-                Ok(v) => v,
-                Err(e) => {
-                    log::error!("构造输入张量失败: {}", e);
-                    break;
-                }
-            };
-            let mut input = token_input;
-
-            for layer in &mut self.network {
-                input = layer.forward(&input);
-            }
-
-            let logits = input;
-
-            if logits.shape()[0] == 0 {
+            if logits.nrows() == 0 {
                 break;
             }
 
             let last_logit = logits
-                .row(logits.shape()[0] - 1)
+                .row(logits.nrows() - 1)
                 .to_owned()
                 .insert_axis(Axis(0));
 
             let probs = softmax(&last_logit);
-
             let adjusted_probs = Self::apply_temperature(&probs, temperature);
 
             let tokens = if top_k > 0 {
@@ -291,9 +337,16 @@ impl LLM {
             output_tokens.push(next_token);
             tokenized.push(next_token);
 
-            if next_token == self.vocab.encode("</s>").unwrap() {
+            if next_token == eos_token {
                 break;
             }
+
+            if tokenized.len() > self.inference_cache_limit {
+                let overflow = tokenized.len() - self.inference_cache_limit;
+                tokenized.drain(0..overflow);
+            }
+
+            logits = self.forward_tokens_inference(&[next_token]);
         }
 
         let token_strs = output_tokens
@@ -314,36 +367,31 @@ impl LLM {
             return output_tokens;
         }
 
+        if tokenized.len() > self.inference_cache_limit {
+            let start_idx = tokenized.len() - self.inference_cache_limit;
+            tokenized = tokenized[start_idx..].to_vec();
+        }
+
         let input_len = tokenized.len();
 
         if input_len >= MAX_SEQ_LEN {
             return output_tokens;
         }
 
+        self.prepare_inference(tokenized.len());
+        let mut logits = self.forward_tokens_inference(&tokenized);
+
         for _ in 0..(MAX_SEQ_LEN - input_len) {
             if output_tokens.len() >= MAX_SEQ_LEN - 1 {
                 break;
             }
 
-            let token_input = Array2::from_shape_vec(
-                (1, tokenized.len()),
-                tokenized.iter().map(|&x| x as f32).collect(),
-            )
-            .unwrap();
-            let mut input = token_input;
-
-            for layer in &mut self.network {
-                input = layer.forward(&input);
-            }
-
-            let logits = input;
-
-            if logits.shape()[0] == 0 {
+            if logits.nrows() == 0 {
                 break;
             }
 
             let last_logit = logits
-                .row(logits.shape()[0] - 1)
+                .row(logits.nrows() - 1)
                 .to_owned()
                 .insert_axis(Axis(0));
 
@@ -359,6 +407,13 @@ impl LLM {
             if next_token == self.vocab.eos_token_id() {
                 break;
             }
+
+            if tokenized.len() > self.inference_cache_limit {
+                let overflow = tokenized.len() - self.inference_cache_limit;
+                tokenized.drain(0..overflow);
+            }
+
+            logits = self.forward_tokens_inference(&[next_token]);
         }
 
         output_tokens
@@ -1195,6 +1250,11 @@ impl LLM {
             return String::new();
         }
 
+        if tokenized.len() > self.inference_cache_limit {
+            let start_idx = tokenized.len() - self.inference_cache_limit;
+            tokenized = tokenized[start_idx..].to_vec();
+        }
+
         let input_len = tokenized.len();
 
         if input_len >= MAX_SEQ_LEN {
@@ -1203,31 +1263,17 @@ impl LLM {
 
         let max_new_tokens = 20.min(MAX_SEQ_LEN - input_len);
 
+        self.prepare_inference(tokenized.len());
+        let mut logits = self.forward_tokens_inference(&tokenized);
+        let eos_token = self.vocab.eos_token_id();
+
         for _ in 0..max_new_tokens {
-            let token_input = match Array2::from_shape_vec(
-                (1, tokenized.len()),
-                tokenized.iter().map(|&x| x as f32).collect(),
-            ) {
-                Ok(v) => v,
-                Err(e) => {
-                    log::error!("构造输入张量失败: {}", e);
-                    break;
-                }
-            };
-            let mut input = token_input;
-
-            for layer in &mut self.network {
-                input = layer.forward(&input);
-            }
-
-            let logits = input;
-
-            if logits.shape()[0] == 0 {
+            if logits.nrows() == 0 {
                 break;
             }
 
             let last_logit = logits
-                .row(logits.shape()[0] - 1)
+                .row(logits.nrows() - 1)
                 .to_owned()
                 .insert_axis(Axis(0));
 
@@ -1246,9 +1292,16 @@ impl LLM {
             output_tokens.push(next_token);
             tokenized.push(next_token);
 
-            if next_token == self.vocab.eos_token_id() {
+            if next_token == eos_token {
                 break;
             }
+
+            if tokenized.len() > self.inference_cache_limit {
+                let overflow = tokenized.len() - self.inference_cache_limit;
+                tokenized.drain(0..overflow);
+            }
+
+            logits = self.forward_tokens_inference(&[next_token]);
         }
 
         let token_strs = output_tokens

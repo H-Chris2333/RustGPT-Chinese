@@ -85,12 +85,40 @@
 //! （× 表示设为 -∞，softmax 后概率为 0）
 //! ```
 
-use std::f32;
 use std::collections::HashMap;
+use std::f32;
 
-use ndarray::{Array2, Axis, s};
+use ndarray::{s, Array2, Axis};
 
-use crate::{EMBEDDING_DIM, adam::Adam, llm::Layer, utils::sample_normal};
+#[cfg(feature = "tensor-accel")]
+use rayon::prelude::*;
+
+use crate::{EMBEDDING_DIM, MAX_INFERENCE_SEQ_LEN, adam::Adam, llm::Layer, utils::sample_normal};
+
+#[cfg(feature = "kv-cache")]
+#[derive(Debug)]
+struct KvCachePool {
+    k: Array2<f32>,
+    v: Array2<f32>,
+    len: usize,
+    capacity: usize,
+}
+
+#[cfg(feature = "kv-cache")]
+impl KvCachePool {
+    fn new(capacity: usize, embedding_dim: usize) -> Self {
+        Self {
+            k: Array2::zeros((capacity, embedding_dim)),
+            v: Array2::zeros((capacity, embedding_dim)),
+            len: 0,
+            capacity,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.len = 0;
+    }
+}
 
 /// **稳定的 Softmax 实现（使用 log-sum-exp 技巧）**
 ///
@@ -176,15 +204,18 @@ pub struct SelfAttention {
     pub cached_attention_output: Option<Array2<f32>>,
 
     // ========== KV缓存优化（推理加速） ==========
-    /// **KV缓存**: (K_cache, V_cache)
+    /// **KV缓存池**
     ///
-    /// 存储历史 token 的 K 和 V 矩阵，避免重复计算。
+    /// 存储历史 token 的 K 和 V 矩阵，避免重复计算。使用预分配的连续内存，
+    /// 支持滑动窗口更新以限制历史长度。
+    #[cfg(feature = "kv-cache")]
+    pub kv_cache: Option<KvCachePool>,
+
+    /// **KV缓存上限（滑动窗口）**
     ///
-    /// **性能提升示例**：
-    /// - 不使用缓存：生成100个token需要 O(100²) = 10,000 次计算
-    /// - 使用缓存：生成100个token需要 O(100) = 100 次计算
-    /// - **加速比**: 100倍！
-    pub kv_cache: Option<(Array2<f32>, Array2<f32>)>,
+    /// 控制最多保留多少历史 token 的键值，以防止缓存无限增长。
+    #[cfg(feature = "kv-cache")]
+    pub kv_cache_limit: usize,
 
     /// **是否启用KV缓存**
     /// - true: 推理模式（快速生成）
@@ -288,7 +319,10 @@ impl SelfAttention {
             cached_attention_scores: None,
             cached_attention_weights: None,
             cached_attention_output: None,
-            kv_cache: None,      // 默认不使用 KV 缓存
+            #[cfg(feature = "kv-cache")]
+            kv_cache: None,
+            #[cfg(feature = "kv-cache")]
+            kv_cache_limit: MAX_INFERENCE_SEQ_LEN,
             use_kv_cache: false, // 默认训练模式
             freeze_updates: false,
             causal_mask_cache: HashMap::new(), // 初始化掩码缓存
@@ -318,6 +352,108 @@ impl SelfAttention {
             }
             mask
         })
+    }
+
+    #[cfg(feature = "kv-cache")]
+    fn ensure_kv_cache_pool(&mut self, required_capacity: usize) {
+        let required_capacity = required_capacity.max(1);
+        match self.kv_cache.as_mut() {
+            Some(pool) => {
+                if pool.capacity < required_capacity {
+                    pool.k = Array2::zeros((required_capacity, self.embedding_dim));
+                    pool.v = Array2::zeros((required_capacity, self.embedding_dim));
+                    pool.capacity = required_capacity;
+                    pool.len = pool.len.min(required_capacity);
+                }
+            }
+            None => {
+                self.kv_cache = Some(KvCachePool::new(required_capacity, self.embedding_dim));
+            }
+        }
+    }
+
+    #[cfg(feature = "kv-cache")]
+    fn prepare_kv_cache(&mut self, incoming_len: usize) -> usize {
+        self.ensure_kv_cache_pool(self.kv_cache_limit.max(incoming_len));
+        let pool = self.kv_cache.as_mut().expect("kv-cache pool must exist");
+
+        if pool.capacity == 0 {
+            pool.len = 0;
+            return 0;
+        }
+
+        if incoming_len >= pool.capacity {
+            pool.len = 0;
+            return 0;
+        }
+
+        if pool.len + incoming_len > pool.capacity {
+            let overflow = pool.len + incoming_len - pool.capacity;
+            if overflow >= pool.len {
+                pool.len = 0;
+            } else {
+                let remaining = pool.len - overflow;
+                let k_slice = pool.k.slice(s![overflow..pool.len, ..]).to_owned();
+                let v_slice = pool.v.slice(s![overflow..pool.len, ..]).to_owned();
+                pool.k
+                    .slice_mut(s![0..remaining, ..])
+                    .assign(&k_slice);
+                pool.v
+                    .slice_mut(s![0..remaining, ..])
+                    .assign(&v_slice);
+                pool.len = remaining;
+            }
+        }
+
+        pool.len
+    }
+
+    fn build_sliding_mask(new_len: usize, base_len: usize, total_len: usize) -> Array2<f32> {
+        let mut mask = Array2::zeros((new_len, total_len));
+        for row in 0..new_len {
+            let allowed = (base_len + row + 1).min(total_len);
+            for col in allowed..total_len {
+                mask[[row, col]] = f32::NEG_INFINITY;
+            }
+        }
+        mask
+    }
+
+    fn compute_head_outputs(
+        &self,
+        q_heads: &Array2<f32>,
+        k_heads: &Array2<f32>,
+        v_heads: &Array2<f32>,
+        q_seq_len: usize,
+        k_seq_len: usize,
+        mask: &Array2<f32>,
+    ) -> Vec<Array2<f32>> {
+        let compute = |head: usize| -> Array2<f32> {
+            let q_head = q_heads
+                .slice(s![head..q_seq_len * self.num_heads; self.num_heads, ..])
+                .to_owned();
+            let k_head = k_heads
+                .slice(s![head..k_seq_len * self.num_heads; self.num_heads, ..])
+                .to_owned();
+            let v_head = v_heads
+                .slice(s![head..k_seq_len * self.num_heads; self.num_heads, ..])
+                .to_owned();
+            let (head_output, _) = Self::attention_with_mask(&q_head, &k_head, &v_head, mask);
+            head_output
+        };
+
+        #[cfg(feature = "tensor-accel")]
+        {
+            (0..self.num_heads)
+                .into_par_iter()
+                .map(|head| compute(head))
+                .collect()
+        }
+
+        #[cfg(not(feature = "tensor-accel"))]
+        {
+            (0..self.num_heads).map(|head| compute(head)).collect()
+        }
     }
 
     /// **计算 Q、K、V 矩阵**
@@ -550,14 +686,17 @@ impl SelfAttention {
     /// 注意力输出，形状与输入相同
     fn multi_head_attention(&mut self, input: &Array2<f32>) -> Array2<f32> {
         let (seq_len, _embedding_dim) = input.dim();
+        if seq_len == 0 {
+            return Array2::zeros((0, self.embedding_dim));
+        }
 
-        // 1. 计算Q, K, V并缓存（避免clone，只在需要时缓存）
+        // 1. 计算 Q, K, V 并缓存（避免 clone，只在需要时缓存）
         let (q, k, v) = self.compute_qkv(input);
 
         // 2. 获取或创建因果掩码
         let mask = self.get_or_create_causal_mask(seq_len).clone();
 
-        // 缓存Q, K, V用于反向传播
+        // 缓存 Q, K, V 用于反向传播
         self.cached_q = Some(q.clone());
         self.cached_k = Some(k.clone());
         self.cached_v = Some(v.clone());
@@ -568,24 +707,8 @@ impl SelfAttention {
         let v_heads = self.reshape_for_heads(&v);
 
         // 4. 对每个头计算注意力（使用缓存掩码）
-        let head_outputs: Vec<Array2<f32>> = (0..self.num_heads)
-            .map(|head| {
-                let q_head = q_heads
-                    .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
-                    .to_owned();
-                let k_head = k_heads
-                    .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
-                    .to_owned();
-                let v_head = v_heads
-                    .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
-                    .to_owned();
-
-                // 使用带掩码的注意力计算
-                let (head_output, _head_weights) =
-                    Self::attention_with_mask(&q_head, &k_head, &v_head, &mask);
-                head_output
-            })
-            .collect();
+        let head_outputs =
+            self.compute_head_outputs(&q_heads, &k_heads, &v_heads, seq_len, seq_len, &mask);
 
         let mut result = Array2::zeros((seq_len * self.num_heads, self.head_dim));
         for (head_idx, head_output) in head_outputs.iter().enumerate().take(self.num_heads) {
@@ -595,7 +718,7 @@ impl SelfAttention {
             }
         }
 
-        // 5. 合并所有头（避免不必要的clone）
+        // 5. 合并所有头（避免不必要的 clone）
         let combined = self.reverse_reshape_from_heads(&result);
         self.cached_attention_output = Some(combined.clone());
 
@@ -606,17 +729,44 @@ impl SelfAttention {
     /// 启用KV缓存模式
     pub fn enable_kv_cache(&mut self) {
         self.use_kv_cache = true;
+        #[cfg(feature = "kv-cache")]
+        {
+            self.ensure_kv_cache_pool(self.kv_cache_limit);
+        }
     }
 
     /// 禁用KV缓存模式并清空缓存
     pub fn disable_kv_cache(&mut self) {
         self.use_kv_cache = false;
-        self.kv_cache = None;
+        #[cfg(feature = "kv-cache")]
+        {
+            self.kv_cache = None;
+        }
     }
 
     /// 清空KV缓存（保持启用状态）
     pub fn clear_kv_cache(&mut self) {
-        self.kv_cache = None;
+        #[cfg(feature = "kv-cache")]
+        if let Some(pool) = self.kv_cache.as_mut() {
+            pool.clear();
+        }
+    }
+
+    /// 调整 KV 缓存窗口上限
+    pub fn set_kv_cache_limit(&mut self, limit: usize) {
+        #[cfg(feature = "kv-cache")]
+        {
+            let limit = limit.max(1);
+            self.kv_cache_limit = limit;
+            if let Some(pool) = self.kv_cache.as_mut() {
+                if pool.capacity != limit {
+                    pool.k = Array2::zeros((limit, self.embedding_dim));
+                    pool.v = Array2::zeros((limit, self.embedding_dim));
+                    pool.capacity = limit;
+                    pool.len = pool.len.min(limit);
+                }
+            }
+        }
     }
 
     /// 带KV缓存的多头自注意力前向传播
@@ -637,75 +787,79 @@ impl SelfAttention {
     /// # 返回
     /// 注意力输出，形状与输入相同
     pub fn forward_with_kv_cache(&mut self, input: &Array2<f32>) -> Array2<f32> {
-        if !self.use_kv_cache {
-            // 如果未启用KV缓存，使用标准的multi_head_attention
+        #[cfg(not(feature = "kv-cache"))]
+        {
             return self.multi_head_attention(input);
         }
 
-        let (seq_len, _embedding_dim) = input.dim();
-
-        // 1. 计算新token的Q, K, V
-        let (q_new, k_new, v_new) = self.compute_qkv(input);
-
-        // 2. 合并KV缓存
-        let (k_all, v_all) = if let Some((k_cache, v_cache)) = &self.kv_cache {
-            // 如果有缓存，拼接新的K和V
-            use ndarray::concatenate;
-            let k_all = match concatenate(Axis(0), &[k_cache.view(), k_new.view()]) {
-                Ok(v) => v,
-                Err(e) => {
-                    log::warn!("KV缓存拼接失败(K): {}，使用未缓存的K", e);
-                    k_new.clone()
-                }
-            };
-            let v_all = match concatenate(Axis(0), &[v_cache.view(), v_new.view()]) {
-                Ok(v) => v,
-                Err(e) => {
-                    log::warn!("KV缓存拼接失败(V): {}，使用未缓存的V", e);
-                    v_new.clone()
-                }
-            };
-            (k_all, v_all)
-        } else {
-            // 如果没有缓存，直接使用新的K和V
-            (k_new.clone(), v_new.clone())
-        };
-
-        // 3. 更新KV缓存
-        self.kv_cache = Some((k_all.clone(), v_all.clone()));
-
-        // 4. 分割为多个头
-        let q_heads = self.reshape_for_heads(&q_new);
-        let k_heads = self.reshape_for_heads(&k_all);
-        let v_heads = self.reshape_for_heads(&v_all);
-
-        // 5. 对每个头计算注意力
-        let head_outputs: Vec<Array2<f32>> = (0..self.num_heads)
-            .map(|head| {
-                let q_head = q_heads
-                    .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
-                    .to_owned();
-                let k_head = k_heads.slice(s![head..; self.num_heads, ..]).to_owned();
-                let v_head = v_heads.slice(s![head..; self.num_heads, ..]).to_owned();
-
-                let (head_output, _head_weights) = Self::attention(&q_head, &k_head, &v_head);
-                head_output
-            })
-            .collect();
-
-        let mut result = Array2::zeros((seq_len * self.num_heads, self.head_dim));
-        for (head_idx, head_output) in head_outputs.iter().enumerate().take(self.num_heads) {
-            for seq_idx in 0..seq_len {
-                let row_idx = seq_idx * self.num_heads + head_idx;
-                result.row_mut(row_idx).assign(&head_output.row(seq_idx));
+        #[cfg(feature = "kv-cache")]
+        {
+            if !self.use_kv_cache {
+                return self.multi_head_attention(input);
             }
+
+            let (seq_len, _embedding_dim) = input.dim();
+            if seq_len == 0 {
+                return Array2::zeros((0, self.embedding_dim));
+            }
+
+            // 1. 计算新 token 的 Q, K, V
+            let (q_new, k_new, v_new) = self.compute_qkv(input);
+
+            // 2. 准备缓存：裁剪/滑动窗口，返回插入前的历史长度
+            let base_len = self.prepare_kv_cache(seq_len);
+            let pool = self
+                .kv_cache
+                .as_mut()
+                .expect("kv-cache pool must exist after preparation");
+
+            let start = base_len;
+            pool.k
+                .slice_mut(s![start..start + seq_len, ..])
+                .assign(&k_new);
+            pool.v
+                .slice_mut(s![start..start + seq_len, ..])
+                .assign(&v_new);
+            pool.len = start + seq_len;
+            let total_len = pool.len;
+
+            // 3. 构建滑动窗口掩码
+            let mask = Self::build_sliding_mask(seq_len, base_len, total_len);
+
+            // 4. 将缓存展平为按头拆分的矩阵
+            let k_all = pool.k.slice(s![0..total_len, ..]).to_owned();
+            let v_all = pool.v.slice(s![0..total_len, ..]).to_owned();
+
+            self.cached_q = Some(q_new.clone());
+            self.cached_k = Some(k_all.clone());
+            self.cached_v = Some(v_all.clone());
+
+            let q_heads = self.reshape_for_heads(&q_new);
+            let k_heads = self.reshape_for_heads(&k_all);
+            let v_heads = self.reshape_for_heads(&v_all);
+
+            let head_outputs = self.compute_head_outputs(
+                &q_heads,
+                &k_heads,
+                &v_heads,
+                seq_len,
+                total_len,
+                &mask,
+            );
+
+            let mut result = Array2::zeros((seq_len * self.num_heads, self.head_dim));
+            for (head_idx, head_output) in head_outputs.iter().enumerate().take(self.num_heads) {
+                for seq_idx in 0..seq_len {
+                    let row_idx = seq_idx * self.num_heads + head_idx;
+                    result.row_mut(row_idx).assign(&head_output.row(seq_idx));
+                }
+            }
+
+            let combined = self.reverse_reshape_from_heads(&result);
+            self.cached_attention_output = Some(combined.clone());
+
+            combined.dot(&self.w_o)
         }
-
-        // 6. 合并所有头
-        let combined = self.reverse_reshape_from_heads(&result);
-
-        // 7. 输出投影
-        combined.dot(&self.w_o)
     }
 }
 
@@ -717,6 +871,15 @@ impl Layer for SelfAttention {
     fn forward(&mut self, input: &Array2<f32>) -> Array2<f32> {
         self.cached_input = Some(input.clone());
         self.multi_head_attention(input)
+    }
+
+    fn forward_inference(&mut self, input: &Array2<f32>) -> Array2<f32> {
+        self.cached_input = Some(input.clone());
+        if self.use_kv_cache {
+            self.forward_with_kv_cache(input)
+        } else {
+            self.multi_head_attention(input)
+        }
     }
 
     fn backward(&mut self, grads: &Array2<f32>, lr: f32) -> Array2<f32> {
@@ -782,5 +945,26 @@ impl Layer for SelfAttention {
         self.w_k.len() + self.w_q.len() + self.w_v.len() + self.w_o.len()
     }
 
-    fn set_training_mode(&mut self, _training: bool) {}
+    fn reset_inference_cache(&mut self) {
+        #[cfg(feature = "kv-cache")]
+        {
+            self.clear_kv_cache();
+        }
+    }
+
+    fn set_inference_cache_limit(&mut self, max_len: usize) {
+        self.set_kv_cache_limit(max_len);
+    }
+
+    fn set_training_mode(&mut self, training: bool) {
+        if training {
+            self.use_kv_cache = false;
+            #[cfg(feature = "kv-cache")]
+            {
+                self.clear_kv_cache();
+            }
+        } else {
+            self.use_kv_cache = true;
+        }
+    }
 }

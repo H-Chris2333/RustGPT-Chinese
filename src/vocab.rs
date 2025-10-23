@@ -102,6 +102,13 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::OnceLock;
 
+#[cfg(feature = "tokenizer-cache")]
+use lru::LruCache;
+#[cfg(feature = "tokenizer-cache")]
+use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(feature = "tokenizer-cache")]
+use std::sync::Mutex;
+
 use bincode::{Decode, Encode};
 use jieba_rs::Jieba;
 use regex::Regex;
@@ -124,6 +131,22 @@ static COMMON_IDIOM_SET: OnceLock<HashSet<String>> = OnceLock::new();
 /// - **内存优势**：共享词典数据结构
 /// - **线程安全**：`OnceLock` 保证只初始化一次
 static JIEBA_INSTANCE: OnceLock<Jieba> = OnceLock::new();
+
+#[cfg(feature = "tokenizer-cache")]
+const TOKEN_CACHE_CAPACITY: usize = 4096;
+
+#[cfg(feature = "tokenizer-cache")]
+static TOKEN_CACHE: OnceLock<Mutex<LruCache<String, Vec<usize>>>> = OnceLock::new();
+
+#[cfg(feature = "tokenizer-cache")]
+static TOKEN_CACHE_HITS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "tokenizer-cache")]
+static TOKEN_CACHE_MISSES: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(feature = "tokenizer-cache")]
+fn tokenizer_cache() -> &'static Mutex<LruCache<String, Vec<usize>>> {
+    TOKEN_CACHE.get_or_init(|| Mutex::new(LruCache::new(TOKEN_CACHE_CAPACITY)))
+}
 
 /// **获取全局成语集合**
 ///
@@ -463,6 +486,38 @@ impl Vocab {
     /// let token_ids = vocab.encode_sequence(text);
     /// // token_ids: [1234, 5678, 9012, 3456]
     /// ```
+    #[cfg(feature = "tokenizer-cache")]
+    fn try_get_cached_tokens(text: &str) -> Option<Vec<usize>> {
+        let cache = tokenizer_cache();
+        let mut guard = cache.lock().ok()?;
+        if let Some(tokens) = guard.get(text) {
+            TOKEN_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+            return Some(tokens.clone());
+        }
+        TOKEN_CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
+        None
+    }
+
+    #[cfg(feature = "tokenizer-cache")]
+    fn store_tokens_in_cache(text: &str, tokens: &[usize]) {
+        if let Ok(mut guard) = tokenizer_cache().lock() {
+            guard.put(text.to_string(), tokens.to_vec());
+        }
+    }
+
+    #[cfg(feature = "tokenizer-cache")]
+    pub fn tokenizer_cache_stats(&self) -> (usize, usize, f32) {
+        let hits = TOKEN_CACHE_HITS.load(Ordering::Relaxed);
+        let misses = TOKEN_CACHE_MISSES.load(Ordering::Relaxed);
+        let total = hits + misses;
+        let hit_rate = if total > 0 {
+            hits as f32 / total as f32
+        } else {
+            0.0
+        };
+        (hits, misses, hit_rate)
+    }
+
     pub fn encode_sequence(&self, text: &str) -> Vec<usize> {
         let mut tokens = Vec::new();
 

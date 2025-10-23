@@ -184,6 +184,20 @@ impl Layer for TransformerBlock {
         &x + &dropout2_out
     }
 
+    fn forward_inference(&mut self, input: &Array2<f32>) -> Array2<f32> {
+        let norm1_out = self.norm1.normalize(input);
+        let attention_out = self.attention.forward_inference(&norm1_out);
+        let dropout1_out = self.dropout1.forward(&attention_out);
+
+        let x = input + &dropout1_out;
+
+        let norm2_out = self.norm2.normalize(&x);
+        let feed_forward_out = self.feed_forward.forward(&norm2_out);
+        let dropout2_out = self.dropout2.forward(&feed_forward_out);
+
+        &x + &dropout2_out
+    }
+
     /// **反向传播：计算梯度并更新参数**
     ///
     /// # 反向传播顺序
@@ -282,5 +296,13 @@ impl Layer for TransformerBlock {
             + self.dropout2.parameters()  // 返回 0
             + self.norm1.parameters()
             + self.norm2.parameters()
+    }
+
+    fn reset_inference_cache(&mut self) {
+        self.attention.reset_inference_cache();
+    }
+
+    fn set_inference_cache_limit(&mut self, max_len: usize) {
+        self.attention.set_kv_cache_limit(max_len);
     }
 }

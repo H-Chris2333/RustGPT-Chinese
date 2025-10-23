@@ -67,13 +67,13 @@
 
 use ndarray::Array2;
 
-use crate::{EMBEDDING_DIM, MAX_SEQ_LEN};
+use crate::{EMBEDDING_DIM, MAX_POSITIONAL_LEN};
 
 /// **位置编码结构体**
 ///
 /// 存储预计算的正弦位置编码矩阵。
 pub struct PositionEncoding {
-    /// **编码矩阵**: (MAX_SEQ_LEN, EMBEDDING_DIM) = (256, 512)
+    /// **编码矩阵**: (MAX_POSITIONAL_LEN, EMBEDDING_DIM)
     ///
     /// 每行对应一个位置的编码向量
     pub encoding: Array2<f32>,
@@ -87,7 +87,7 @@ impl PositionEncoding {
     /// # 计算流程
     ///
     /// ```text
-    /// 对于每个位置 pos (0 到 MAX_SEQ_LEN-1):
+    /// 对于每个位置 pos (0 到 MAX_POSITIONAL_LEN-1):
     ///   对于每个维度 i (0 到 EMBEDDING_DIM-1):
     ///     angle = pos / 10000^(i/d)
     ///     if i 是偶数:
@@ -98,14 +98,14 @@ impl PositionEncoding {
     ///
     /// # 性能考虑
     ///
-    /// - 初始化时计算一次：O(MAX_SEQ_LEN × EMBEDDING_DIM) ≈ O(131k)
+    /// - 初始化时计算一次：O(MAX_POSITIONAL_LEN × EMBEDDING_DIM)
     /// - 后续使用时直接查表：O(1)
-    /// - 内存占用：256 × 512 × 4 bytes ≈ 524 KB
+    /// - 内存占用：MAX_POSITIONAL_LEN × EMBEDDING_DIM × 4 bytes
     pub fn new() -> Self {
-        // Initialize the position encoding matrix (MAX_SEQ_LEN x EMBEDDING_DIM)
-        let mut encoding = Array2::zeros((MAX_SEQ_LEN, EMBEDDING_DIM));
+        // Initialize the position encoding matrix (MAX_POSITIONAL_LEN x EMBEDDING_DIM)
+        let mut encoding = Array2::zeros((MAX_POSITIONAL_LEN, EMBEDDING_DIM));
 
-        for pos in 0..MAX_SEQ_LEN {
+        for pos in 0..MAX_POSITIONAL_LEN {
             for i in 0..EMBEDDING_DIM {
                 let angle = pos as f32 / 10000f32.powf((i / 2) as f32 / EMBEDDING_DIM as f32);
 
@@ -123,13 +123,13 @@ impl PositionEncoding {
     /// **获取特定位置和维度的编码值**
     ///
     /// # 参数
-    /// - `position`: 位置索引（0 到 MAX_SEQ_LEN-1）
+    /// - `position`: 位置索引（0 到 MAX_POSITIONAL_LEN-1）
     /// - `dimension`: 维度索引（0 到 EMBEDDING_DIM-1）
     ///
     /// # Panic
     /// 如果位置或维度超出范围，程序会 panic
     pub fn get_encoding(&self, position: usize, dimension: usize) -> f32 {
-        if position >= MAX_SEQ_LEN || dimension >= EMBEDDING_DIM {
+        if position >= MAX_POSITIONAL_LEN || dimension >= EMBEDDING_DIM {
             log::warn!(
                 "位置编码索引越界 position={} dimension={}，将返回0.0 作为回退",
                 position,
@@ -167,7 +167,7 @@ impl PositionEncoding {
         let (seq_len, embedding_dim) = input.dim();
 
         // Determine how many positions we can encode based on input length
-        let positions_to_encode = std::cmp::min(seq_len, MAX_SEQ_LEN);
+        let positions_to_encode = std::cmp::min(seq_len, MAX_POSITIONAL_LEN);
         let dims_to_encode = std::cmp::min(embedding_dim, EMBEDDING_DIM);
 
         for pos in 0..positions_to_encode {

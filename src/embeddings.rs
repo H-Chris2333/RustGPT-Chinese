@@ -49,7 +49,7 @@
 use ndarray::{Array2, Zip};
 
 use crate::{
-    EMBEDDING_DIM, adam::Adam, llm::Layer, position_encoding::PositionEncoding,
+    EMBEDDING_DIM, MAX_POSITIONAL_LEN, adam::Adam, llm::Layer, position_encoding::PositionEncoding,
     utils::sample_normal, vocab::Vocab,
 };
 
@@ -87,6 +87,13 @@ pub struct Embeddings {
     ///
     /// 预分配的缓冲区，避免每次forward都重新分配Array2
     pub position_cache: Array2<f32>,
+
+    /// **推理模式下的当前位置偏移**
+    ///
+    /// KV-Cache 推理模式下需要维护一个全局位置游标，以便增量地为新 token
+    /// 分配绝对位置编码。该字段在启用 `kv-cache` 特性时可用。
+    #[cfg(feature = "kv-cache")]
+    pub inference_position: usize,
 }
 
 impl Default for Embeddings {
@@ -97,7 +104,9 @@ impl Default for Embeddings {
             position_encoder: PositionEncoding::new(),
             cached_input: None,
             token_optimizer: Adam::new((vocab.words.len(), EMBEDDING_DIM)),
-            position_cache: Array2::<f32>::zeros((crate::MAX_SEQ_LEN, EMBEDDING_DIM)),
+            position_cache: Array2::<f32>::zeros((MAX_POSITIONAL_LEN, EMBEDDING_DIM)),
+            #[cfg(feature = "kv-cache")]
+            inference_position: 0,
         }
     }
 }
@@ -116,7 +125,9 @@ impl Embeddings {
             position_encoder: PositionEncoding::new(),
             cached_input: None,
             token_optimizer: Adam::new((vocab.words.len(), EMBEDDING_DIM)),
-            position_cache: Array2::<f32>::zeros((crate::MAX_SEQ_LEN, EMBEDDING_DIM)),
+            position_cache: Array2::<f32>::zeros((MAX_POSITIONAL_LEN, EMBEDDING_DIM)),
+            #[cfg(feature = "kv-cache")]
+            inference_position: 0,
         }
     }
 
@@ -209,18 +220,29 @@ impl Embeddings {
     ///   final[2] = embedding_3 + PE(2)
     /// ```
     pub fn embed_tokens(&self, token_ids: &[usize]) -> Array2<f32> {
+        self.embed_tokens_with_offset(token_ids, 0)
+    }
+
+    /// **根据起始位置偏移获取嵌入**
+    ///
+    /// 推理模式下会在缓存窗口内滑动，因此需要能够指定位置编码的起始偏移。
+    pub fn embed_tokens_with_offset(&self, token_ids: &[usize], start_pos: usize) -> Array2<f32> {
+        if token_ids.is_empty() {
+            return Array2::zeros((0, EMBEDDING_DIM));
+        }
+
         // 步骤 1：查询词嵌入
-        let token_embeds = Self::get_token_embeddings(&self.token_embeddings, token_ids);
+        let mut token_embeds = Self::get_token_embeddings(&self.token_embeddings, token_ids);
 
-        // 步骤 2：直接从预生成的位置编码矩阵中切片，避免重新分配
-        let seq_len = token_ids.len();
-        let position_embeds = self
-            .position_encoder
-            .encoding
-            .slice(ndarray::s![0..seq_len, ..]);
+        // 步骤 2：使用偏移位置编码逐元素相加
+        let capacity = self.position_encoder.encoding.nrows().max(1);
+        for (row_idx, mut row) in token_embeds.rows_mut().into_iter().enumerate() {
+            let pos = (start_pos + row_idx) % capacity;
+            let pos_row = self.position_encoder.encoding.row(pos);
+            row += &pos_row;
+        }
 
-        // 步骤 3：逐元素相加
-        token_embeds + position_embeds
+        token_embeds
     }
 }
 
@@ -246,6 +268,27 @@ impl Layer for Embeddings {
 
         // 查询嵌入 + 添加位置编码
         self.embed_tokens(&token_ids)
+    }
+
+    fn forward_inference(&mut self, input: &Array2<f32>) -> Array2<f32> {
+        #[cfg(feature = "kv-cache")]
+        {
+            self.cached_input = Some(input.clone());
+            let token_ids: Vec<usize> = input.iter().map(|&x| x as usize).collect();
+            let embeddings = self.embed_tokens_with_offset(&token_ids, self.inference_position);
+
+            let capacity = self.position_encoder.encoding.nrows();
+            if capacity > 0 {
+                self.inference_position = (self.inference_position + token_ids.len()) % capacity;
+            }
+
+            return embeddings;
+        }
+
+        #[cfg(not(feature = "kv-cache"))]
+        {
+            Embeddings::forward(self, input)
+        }
     }
 
     /// **反向传播：更新词嵌入矩阵**
@@ -323,6 +366,13 @@ impl Layer for Embeddings {
     /// 位置编码不计入，因为它是固定的。
     fn parameters(&self) -> usize {
         self.token_embeddings.len()
+    }
+
+    fn reset_inference_cache(&mut self) {
+        #[cfg(feature = "kv-cache")]
+        {
+            self.inference_position = 0;
+        }
     }
 
     /// **设置训练模式**
