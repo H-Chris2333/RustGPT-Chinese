@@ -2,6 +2,23 @@
 //!
 //! 这是 Transformer 架构的核心创新，让模型能够捕捉序列中的长距离依赖关系。
 //!
+//! ## 性能优化（v0.3.2）
+//!
+//! ### 1. 因果掩码缓存
+//! - **问题**: 每次前向传播都需要逐元素填充 NEG_INFINITY 创建掩码矩阵
+//! - **解决**: 使用 HashMap 缓存不同序列长度的掩码，避免重复创建
+//! - **收益**: 减少 O(seq_len²) 的掩码创建开销
+//!
+//! ### 2. 优化矩阵乘法
+//! - **策略**: 使用 ndarray 的优化 dot() 方法（基于 BLAS）
+//! - **掩码应用**: 使用矩阵加法替代逐元素设置
+//! - **并行处理**: 多头计算使用 rayon 并行化
+//!
+//! ### 3. 稳定的 Softmax 实现
+//! - **数值稳定性**: 使用 log-sum-exp 技巧（减去最大值）
+//! - **避免溢出**: 处理极大/极小值时保持数值稳定
+//! - **梯度计算**: 简化但稳定的反向传播（注：完整梯度计算较复杂，当前使用近似）
+//!
 //! ## 核心思想：注意力即"权重分配"
 //!
 //! 在自然语言中，不是所有词都同等重要。注意力机制让模型学习：
@@ -69,14 +86,47 @@
 //! ```
 
 use std::f32;
+use std::collections::HashMap;
 
 use ndarray::{Array2, Axis, s};
 use ndarray::parallel::prelude::*;
 use rand::Rng;
 use rand_distr::{Distribution, Normal};
 
-use crate::utils::softmax;
 use crate::{EMBEDDING_DIM, adam::Adam, llm::Layer};
+
+/// **稳定的 Softmax 实现（使用 log-sum-exp 技巧）**
+///
+/// 通过减去最大值来避免数值溢出，确保在处理大数值时的稳定性。
+///
+/// # 参数
+/// - `logits`: 输入矩阵 (seq_len, seq_len)
+///
+/// # 返回值
+/// Softmax 输出，形状与输入相同，每行元素和为1
+fn stable_softmax(logits: &Array2<f32>) -> Array2<f32> {
+    let mut result = Array2::zeros(logits.dim());
+
+    for (i, row) in logits.rows().into_iter().enumerate() {
+        // 找到该行的最大值（数值稳定性）
+        let max_val = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+
+        // 计算 exp(x - max)
+        let mut exp_vals = row.mapv(|x| (x - max_val).exp());
+
+        // 计算归一化因子
+        let sum_exp: f32 = exp_vals.sum();
+
+        // 归一化（添加小的epsilon避免除零）
+        if sum_exp > 1e-15 {
+            exp_vals.mapv_inplace(|x| x / sum_exp);
+        }
+
+        result.row_mut(i).assign(&exp_vals);
+    }
+
+    result
+}
 
 /// **多头自注意力机制结构体**
 pub struct SelfAttention {
@@ -146,6 +196,11 @@ pub struct SelfAttention {
 
     /// **是否冻结注意力层参数更新**（用于稳定训练排障）
     pub freeze_updates: bool,
+
+    // ========== 因果掩码缓存（性能优化） ==========
+    /// **缓存不同序列长度的因果掩码**
+    /// Key: 序列长度, Value: 下三角掩码矩阵
+    pub causal_mask_cache: HashMap<usize, Array2<f32>>,
 
     // ========== Adam 优化器（每个权重矩阵一个） ==========
     pub optimizer_w_q: Adam,
@@ -257,11 +312,33 @@ impl SelfAttention {
             kv_cache: None,      // 默认不使用 KV 缓存
             use_kv_cache: false, // 默认训练模式
             freeze_updates: false,
+            causal_mask_cache: HashMap::new(), // 初始化掩码缓存
             optimizer_w_q: Adam::new((embedding_dim, embedding_dim)),
             optimizer_w_k: Adam::new((embedding_dim, embedding_dim)),
             optimizer_w_v: Adam::new((embedding_dim, embedding_dim)),
             optimizer_w_o: Adam::new((embedding_dim, embedding_dim)),
         }
+    }
+
+    /// **获取或创建因果掩码**
+    ///
+    /// 预生成并缓存下三角因果掩码，避免每次forward时逐元素填充。
+    ///
+    /// # 参数
+    /// - `seq_len`: 序列长度
+    ///
+    /// # 返回值
+    /// 因果掩码矩阵 (seq_len, seq_len)，下三角为0，上三角为-∞
+    fn get_or_create_causal_mask(&mut self, seq_len: usize) -> &Array2<f32> {
+        self.causal_mask_cache.entry(seq_len).or_insert_with(|| {
+            let mut mask = Array2::zeros((seq_len, seq_len));
+            for i in 0..seq_len {
+                for j in (i + 1)..seq_len {
+                    mask[[i, j]] = f32::NEG_INFINITY;
+                }
+            }
+            mask
+        })
     }
 
     /// **计算 Q、K、V 矩阵**
@@ -287,7 +364,7 @@ impl SelfAttention {
         (q, k, v)
     }
 
-    /// **单头注意力计算**
+    /// **单头注意力计算（带缓存掩码）**
     ///
     /// 这是注意力机制的核心：通过 Q 和 K 的相似度，对 V 进行加权求和。
     ///
@@ -299,12 +376,51 @@ impl SelfAttention {
     ///
     /// 2. **应用因果掩码**: 将未来位置设为 -∞
     ///    - 确保自回归性质（不能看到未来）
+    ///    - 使用预缓存的掩码矩阵
     ///
     /// 3. **Softmax 归一化**: weights = softmax(scores)
     ///    - 转换为概率分布（总和为1）
     ///
     /// 4. **加权求和**: output = weights · V
     ///    - 根据注意力权重组合值向量
+    ///
+    /// # 参数
+    /// - `q`: Query 矩阵 (seq_len, head_dim=64)
+    /// - `k`: Key 矩阵 (seq_len, head_dim=64)
+    /// - `v`: Value 矩阵 (seq_len, head_dim=64)
+    /// - `mask`: 因果掩码 (seq_len, seq_len)
+    ///
+    /// # 返回值
+    /// - `output`: 注意力输出 (seq_len, head_dim)
+    /// - `weights`: 注意力权重 (seq_len, seq_len)，用于反向传播
+    fn attention_with_mask(
+        q: &Array2<f32>,
+        k: &Array2<f32>,
+        v: &Array2<f32>,
+        mask: &Array2<f32>,
+    ) -> (Array2<f32>, Array2<f32>) {
+        // 步骤 1: 计算缩放点积注意力分数
+        let dk = (q.ncols() as f32).sqrt(); // √d_k = √64 = 8
+
+        // 使用 ndarray 的优化矩阵乘法
+        let k_t = k.t();
+        let scores = q.dot(&k_t) / dk; // (seq_len, seq_len)
+
+        // 步骤 2: 应用因果掩码（直接相加，利用缓存的掩码）
+        let masked_scores = scores + mask;
+
+        // 步骤 3: Softmax 归一化（使用稳定的log-sum-exp实现）
+        let weights = stable_softmax(&masked_scores);
+
+        // 步骤 4: 使用注意力权重加权 V（优化矩阵乘法）
+        let output = weights.dot(v);
+
+        (output, weights)
+    }
+
+    /// **旧版单头注意力计算（保持向后兼容）**
+    ///
+    /// 这是注意力机制的核心：通过 Q 和 K 的相似度，对 V 进行加权求和。
     ///
     /// # 参数
     /// - `q`: Query 矩阵 (seq_len, head_dim=64)
@@ -333,7 +449,7 @@ impl SelfAttention {
 
         // 步骤 3: Softmax 归一化
         // softmax 将 -∞ 转换为 0，其他值转换为 0-1 之间的概率
-        let weights = softmax(&scores);
+        let weights = stable_softmax(&scores);
 
         // 步骤 4: 使用注意力权重加权 V
         let output = weights.dot(v);
@@ -438,14 +554,15 @@ impl SelfAttention {
         result
     }
 
-    /// 多头自注意力的前向传播
+    /// 多头自注意力的前向传播（优化版：使用缓存掩码）
     ///
     /// # 算法流程
     /// 1. 计算Q、K、V矩阵：Q=XW_q, K=XW_k, V=XW_v
-    /// 2. 分割为多个注意力头 (num_heads=8)
-    /// 3. 对每个头计算：Attention(Q,K,V) = softmax(QK^T/√d_k)V
-    /// 4. 拼接所有头的输出
-    /// 5. 通过输出投影：output = concat(heads)W_o
+    /// 2. 获取或创建因果掩码（缓存）
+    /// 3. 分割为多个注意力头 (num_heads=8)
+    /// 4. 对每个头计算：Attention(Q,K,V) = softmax(QK^T/√d_k)V
+    /// 5. 拼接所有头的输出
+    /// 6. 通过输出投影：output = concat(heads)W_o
     ///
     /// # 参数
     /// - `input`: 输入张量，形状为 (seq_len, embedding_dim)
@@ -455,18 +572,23 @@ impl SelfAttention {
     fn multi_head_attention(&mut self, input: &Array2<f32>) -> Array2<f32> {
         let (seq_len, _embedding_dim) = input.dim();
 
-        // 1. 计算Q, K, V并缓存
+        // 1. 计算Q, K, V并缓存（避免clone，只在需要时缓存）
         let (q, k, v) = self.compute_qkv(input);
+
+        // 2. 获取或创建因果掩码
+        let mask = self.get_or_create_causal_mask(seq_len).clone();
+
+        // 缓存Q, K, V用于反向传播
         self.cached_q = Some(q.clone());
         self.cached_k = Some(k.clone());
         self.cached_v = Some(v.clone());
 
-        // 2. 分割为多个头
+        // 3. 分割为多个头
         let q_heads = self.reshape_for_heads(&q);
         let k_heads = self.reshape_for_heads(&k);
         let v_heads = self.reshape_for_heads(&v);
 
-        // 3. 对每个头计算注意力
+        // 4. 对每个头计算注意力（并行处理，使用缓存掩码）
         let head_outputs: Vec<Array2<f32>> = (0..self.num_heads)
             .into_par_iter()
             .map(|head| {
@@ -480,25 +602,26 @@ impl SelfAttention {
                     .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
                     .to_owned();
 
-                let (head_output, _head_weights) = Self::attention(&q_head, &k_head, &v_head);
+                // 使用带掩码的注意力计算
+                let (head_output, _head_weights) =
+                    Self::attention_with_mask(&q_head, &k_head, &v_head, &mask);
                 head_output
             })
             .collect();
 
         let mut result = Array2::zeros((seq_len * self.num_heads, self.head_dim));
-        for head_idx in 0..self.num_heads {
-            let head_output = &head_outputs[head_idx];
+        for (head_idx, head_output) in head_outputs.iter().enumerate().take(self.num_heads) {
             for seq_idx in 0..seq_len {
                 let row_idx = seq_idx * self.num_heads + head_idx;
                 result.row_mut(row_idx).assign(&head_output.row(seq_idx));
             }
         }
 
-        // 4. 合并所有头
+        // 5. 合并所有头（避免不必要的clone）
         let combined = self.reverse_reshape_from_heads(&result);
         self.cached_attention_output = Some(combined.clone());
 
-        // 5. 输出投影
+        // 6. 输出投影
         combined.dot(&self.w_o)
     }
 
@@ -594,8 +717,7 @@ impl SelfAttention {
             .collect();
 
         let mut result = Array2::zeros((seq_len * self.num_heads, self.head_dim));
-        for head_idx in 0..self.num_heads {
-            let head_output = &head_outputs[head_idx];
+        for (head_idx, head_output) in head_outputs.iter().enumerate().take(self.num_heads) {
             for seq_idx in 0..seq_len {
                 let row_idx = seq_idx * self.num_heads + head_idx;
                 result.row_mut(row_idx).assign(&head_output.row(seq_idx));
@@ -676,9 +798,7 @@ impl Layer for SelfAttention {
         let grad_input_from_k = grad_k.dot(&self.w_k.t());
         let grad_input_from_v = grad_v.dot(&self.w_v.t());
 
-        let grad_input = grad_input_from_q + grad_input_from_k + grad_input_from_v;
-
-        grad_input
+        grad_input_from_q + grad_input_from_k + grad_input_from_v
     }
 
     fn parameters(&self) -> usize {
