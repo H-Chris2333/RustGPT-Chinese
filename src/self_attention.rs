@@ -85,12 +85,13 @@
 //! （× 表示设为 -∞，softmax 后概率为 0）
 //! ```
 
-use std::f32;
 use std::collections::HashMap;
+use std::f32;
 
-use ndarray::{Array2, Axis, s};
+use ndarray::{s, Array2, ArrayView2, Axis};
+use ndarray::linalg::general_mat_mul;
 
-use crate::{EMBEDDING_DIM, adam::Adam, llm::Layer, utils::sample_normal};
+use crate::{adam::Adam, llm::Layer, utils::sample_normal, EMBEDDING_DIM};
 
 /// **稳定的 Softmax 实现（使用 log-sum-exp 技巧）**
 ///
@@ -123,6 +124,47 @@ fn stable_softmax(logits: &Array2<f32>) -> Array2<f32> {
     }
 
     result
+}
+
+/// **稳定的 Softmax 梯度计算**
+///
+/// 给定 softmax 的输出和上游梯度，计算对 softmax 输入的梯度。
+///
+/// # 数学原理
+/// 对于 softmax: y_i = exp(x_i) / sum(exp(x_j))
+/// 梯度公式: ∂L/∂x_i = y_i * (∂L/∂y_i - sum_j(y_j * ∂L/∂y_j))
+///
+/// 这个公式确保了数值稳定性，并且正确处理了 softmax 的 Jacobian 矩阵。
+///
+/// # 参数
+/// - `softmax_output`: Softmax 的输出 (seq_len, seq_len)
+/// - `grad_output`: 上游梯度 (seq_len, seq_len)
+///
+/// # 返回值
+/// 对 softmax 输入的梯度，形状与输入相同
+fn stable_softmax_gradient(softmax_output: &Array2<f32>, grad_output: &Array2<f32>) -> Array2<f32> {
+    let mut grad_input = Array2::zeros(softmax_output.dim());
+
+    for (i, (sm_row, grad_row)) in softmax_output
+        .rows()
+        .into_iter()
+        .zip(grad_output.rows())
+        .enumerate()
+    {
+        // 计算 sum_j(y_j * ∂L/∂y_j)
+        let dot_product: f32 = sm_row
+            .iter()
+            .zip(grad_row.iter())
+            .map(|(&y, &g)| y * g)
+            .sum();
+
+        // 计算梯度: y_i * (∂L/∂y_i - dot_product)
+        for (j, (&y_val, &g_val)) in sm_row.iter().zip(grad_row.iter()).enumerate() {
+            grad_input[[i, j]] = y_val * (g_val - dot_product);
+        }
+    }
+
+    grad_input
 }
 
 /// **多头自注意力机制结构体**
@@ -166,11 +208,8 @@ pub struct SelfAttention {
     /// **缓存V矩阵**: (seq_len, 512) - 值矩阵
     pub cached_v: Option<Array2<f32>>,
 
-    /// **缓存注意力分数**: (seq_len, seq_len) - QK^T/√d_k 的结果
-    pub cached_attention_scores: Option<Array2<f32>>,
-
-    /// **缓存注意力权重**: (seq_len, seq_len) - softmax 后的概率分布
-    pub cached_attention_weights: Option<Array2<f32>>,
+    /// **缓存注意力权重**: Vec of (seq_len, seq_len) - 每个头softmax后的概率分布
+    pub cached_attention_weights: Option<Vec<Array2<f32>>>,
 
     /// **缓存注意力输出**: (seq_len, 512) - 多头拼接后、投影前的结果
     pub cached_attention_output: Option<Array2<f32>>,
@@ -285,7 +324,6 @@ impl SelfAttention {
             cached_q: None,
             cached_k: None,
             cached_v: None,
-            cached_attention_scores: None,
             cached_attention_weights: None,
             cached_attention_output: None,
             kv_cache: None,      // 默认不使用 KV 缓存
@@ -373,26 +411,26 @@ impl SelfAttention {
     /// - `output`: 注意力输出 (seq_len, head_dim)
     /// - `weights`: 注意力权重 (seq_len, seq_len)，用于反向传播
     fn attention_with_mask(
-        q: &Array2<f32>,
-        k: &Array2<f32>,
-        v: &Array2<f32>,
-        mask: &Array2<f32>,
+        q: ArrayView2<f32>,
+        k: ArrayView2<f32>,
+        v: ArrayView2<f32>,
+        mask: ArrayView2<f32>,
     ) -> (Array2<f32>, Array2<f32>) {
-        // 步骤 1: 计算缩放点积注意力分数
-        let dk = (q.ncols() as f32).sqrt(); // √d_k = √64 = 8
+        let dk = (q.ncols() as f32).sqrt();
 
-        // 使用 ndarray 的优化矩阵乘法
-        let k_t = k.t();
-        let scores = q.dot(&k_t) / dk; // (seq_len, seq_len)
+        // 使用 BLAS 加速的通用矩阵乘法
+        let mut scores = Array2::zeros((q.nrows(), k.nrows()));
+        general_mat_mul(1.0 / dk, &q, &k.t(), 0.0, &mut scores);
 
-        // 步骤 2: 应用因果掩码（直接相加，利用缓存的掩码）
-        let masked_scores = scores + mask;
+        // 应用掩码
+        let masked_scores = &scores + &mask;
 
-        // 步骤 3: Softmax 归一化（使用稳定的log-sum-exp实现）
+        // 稳定的 softmax
         let weights = stable_softmax(&masked_scores);
 
-        // 步骤 4: 使用注意力权重加权 V（优化矩阵乘法）
-        let output = weights.dot(v);
+        // 计算输出
+        let mut output = Array2::zeros((weights.nrows(), v.ncols()));
+        general_mat_mul(1.0, &weights, &v, 0.0, &mut output);
 
         (output, weights)
     }
@@ -533,7 +571,7 @@ impl SelfAttention {
         result
     }
 
-    /// 多头自注意力的前向传播（优化版：使用缓存掩码）
+    /// 多头自注意力的前向传播（优化版：使用缓存掩码与优化矩阵运算）
     ///
     /// # 算法流程
     /// 1. 计算Q、K、V矩阵：Q=XW_q, K=XW_k, V=XW_v
@@ -543,6 +581,11 @@ impl SelfAttention {
     /// 5. 拼接所有头的输出
     /// 6. 通过输出投影：output = concat(heads)W_o
     ///
+    /// # 优化策略
+    /// - 使用引用减少不必要的clone
+    /// - 缓存注意力分数和权重用于稳定的梯度计算
+    /// - 使用BLAS加速的矩阵乘法
+    ///
     /// # 参数
     /// - `input`: 输入张量，形状为 (seq_len, embedding_dim)
     ///
@@ -551,53 +594,58 @@ impl SelfAttention {
     fn multi_head_attention(&mut self, input: &Array2<f32>) -> Array2<f32> {
         let (seq_len, _embedding_dim) = input.dim();
 
-        // 1. 计算Q, K, V并缓存（避免clone，只在需要时缓存）
+        // 1. 计算Q, K, V（使用优化的矩阵乘法）
         let (q, k, v) = self.compute_qkv(input);
 
-        // 2. 获取或创建因果掩码
+        // 2. 先克隆掩码，避免借用冲突
         let mask = self.get_or_create_causal_mask(seq_len).clone();
-
-        // 缓存Q, K, V用于反向传播
-        self.cached_q = Some(q.clone());
-        self.cached_k = Some(k.clone());
-        self.cached_v = Some(v.clone());
+        let num_heads = self.num_heads;
 
         // 3. 分割为多个头
         let q_heads = self.reshape_for_heads(&q);
         let k_heads = self.reshape_for_heads(&k);
         let v_heads = self.reshape_for_heads(&v);
 
-        // 4. 对每个头计算注意力（使用缓存掩码）
-        let head_outputs: Vec<Array2<f32>> = (0..self.num_heads)
-            .map(|head| {
-                let q_head = q_heads
-                    .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
-                    .to_owned();
-                let k_head = k_heads
-                    .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
-                    .to_owned();
-                let v_head = v_heads
-                    .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
-                    .to_owned();
+        // 4. 对每个头计算注意力，收集weights用于反向传播
+        let mut head_outputs = Vec::with_capacity(num_heads);
+        let mut all_weights = Vec::with_capacity(num_heads);
 
-                // 使用带掩码的注意力计算
-                let (head_output, _head_weights) =
-                    Self::attention_with_mask(&q_head, &k_head, &v_head, &mask);
-                head_output
-            })
-            .collect();
+        for head in 0..num_heads {
+            let q_head = q_heads.slice(s![head..seq_len * num_heads; num_heads, ..]);
+            let k_head = k_heads.slice(s![head..seq_len * num_heads; num_heads, ..]);
+            let v_head = v_heads.slice(s![head..seq_len * num_heads; num_heads, ..]);
 
-        let mut result = Array2::zeros((seq_len * self.num_heads, self.head_dim));
-        for (head_idx, head_output) in head_outputs.iter().enumerate().take(self.num_heads) {
+            // 使用带掩码的注意力计算，返回权重
+            let (head_output, weights) =
+                Self::attention_with_mask(q_head, k_head, v_head, mask.view());
+
+            head_outputs.push(head_output);
+            all_weights.push(weights);
+        }
+
+        // 5. 合并所有头
+        let mut result = Array2::zeros((seq_len * num_heads, self.head_dim));
+        for (head_idx, head_output) in head_outputs.iter().enumerate() {
             for seq_idx in 0..seq_len {
-                let row_idx = seq_idx * self.num_heads + head_idx;
+                let row_idx = seq_idx * num_heads + head_idx;
                 result.row_mut(row_idx).assign(&head_output.row(seq_idx));
             }
         }
 
-        // 5. 合并所有头（避免不必要的clone）
         let combined = self.reverse_reshape_from_heads(&result);
+
+        // 缓存中间结果用于反向传播
+        self.cached_q = Some(q);
+        self.cached_k = Some(k);
+        self.cached_v = Some(v);
         self.cached_attention_output = Some(combined.clone());
+
+        // 缓存所有头的weights用于反向传播
+        if !all_weights.is_empty() {
+            self.cached_attention_weights = Some(all_weights);
+        } else {
+            self.cached_attention_weights = None;
+        }
 
         // 6. 输出投影
         combined.dot(&self.w_o)
@@ -620,91 +668,58 @@ impl SelfAttention {
     }
 
     /// 带KV缓存的多头自注意力前向传播
-    ///
-    /// # 算法优化
-    /// 在自回归生成时，每次只生成一个新token。历史token的K和V矩阵不变，
-    /// 可以直接从缓存中复用，只需计算新token的K和V。
-    ///
-    /// # 性能提升
-    /// - 训练时：不使用缓存（需要完整的梯度）
-    /// - 推理时：使用缓存，速度提升10-100倍
-    ///
-    /// # 参数
-    /// - `input`: 输入张量，形状为 (seq_len, embedding_dim)
-    ///   - 使用缓存时：seq_len=1（只有新token）
-    ///   - 不使用缓存时：seq_len=任意值
-    ///
-    /// # 返回
-    /// 注意力输出，形状与输入相同
     pub fn forward_with_kv_cache(&mut self, input: &Array2<f32>) -> Array2<f32> {
         if !self.use_kv_cache {
-            // 如果未启用KV缓存，使用标准的multi_head_attention
             return self.multi_head_attention(input);
         }
 
-        let (seq_len, _embedding_dim) = input.dim();
-
-        // 1. 计算新token的Q, K, V
+        let (seq_len_new, _embedding_dim) = input.dim();
         let (q_new, k_new, v_new) = self.compute_qkv(input);
 
-        // 2. 合并KV缓存
+        // 合并缓存
         let (k_all, v_all) = if let Some((k_cache, v_cache)) = &self.kv_cache {
-            // 如果有缓存，拼接新的K和V
             use ndarray::concatenate;
-            let k_all = match concatenate(Axis(0), &[k_cache.view(), k_new.view()]) {
-                Ok(v) => v,
-                Err(e) => {
-                    log::warn!("KV缓存拼接失败(K): {}，使用未缓存的K", e);
-                    k_new.clone()
-                }
-            };
-            let v_all = match concatenate(Axis(0), &[v_cache.view(), v_new.view()]) {
-                Ok(v) => v,
-                Err(e) => {
-                    log::warn!("KV缓存拼接失败(V): {}，使用未缓存的V", e);
-                    v_new.clone()
-                }
-            };
+            let k_all = concatenate(Axis(0), &[k_cache.view(), k_new.view()])
+                .unwrap_or_else(|_| k_new.clone());
+            let v_all = concatenate(Axis(0), &[v_cache.view(), v_new.view()])
+                .unwrap_or_else(|_| v_new.clone());
             (k_all, v_all)
         } else {
-            // 如果没有缓存，直接使用新的K和V
             (k_new.clone(), v_new.clone())
         };
 
-        // 3. 更新KV缓存
         self.kv_cache = Some((k_all.clone(), v_all.clone()));
 
-        // 4. 分割为多个头
+        let total_len = k_all.nrows();
+        let num_heads = self.num_heads;
+
+        let mask_full = self.get_or_create_causal_mask(total_len).clone();
+        let mask_view = mask_full.slice(s![total_len - seq_len_new.., ..]);
+
         let q_heads = self.reshape_for_heads(&q_new);
         let k_heads = self.reshape_for_heads(&k_all);
         let v_heads = self.reshape_for_heads(&v_all);
 
-        // 5. 对每个头计算注意力
-        let head_outputs: Vec<Array2<f32>> = (0..self.num_heads)
-            .map(|head| {
-                let q_head = q_heads
-                    .slice(s![head..seq_len * self.num_heads; self.num_heads, ..])
-                    .to_owned();
-                let k_head = k_heads.slice(s![head..; self.num_heads, ..]).to_owned();
-                let v_head = v_heads.slice(s![head..; self.num_heads, ..]).to_owned();
+        let mut head_outputs = Vec::with_capacity(num_heads);
+        for head in 0..num_heads {
+            let q_head = q_heads.slice(s![head..seq_len_new * num_heads; num_heads, ..]);
+            let k_head = k_heads.slice(s![head..total_len * num_heads; num_heads, ..]);
+            let v_head = v_heads.slice(s![head..total_len * num_heads; num_heads, ..]);
 
-                let (head_output, _head_weights) = Self::attention(&q_head, &k_head, &v_head);
-                head_output
-            })
-            .collect();
+            let (head_output, _weights) =
+                Self::attention_with_mask(q_head, k_head, v_head, mask_view.view());
+            head_outputs.push(head_output);
+        }
 
-        let mut result = Array2::zeros((seq_len * self.num_heads, self.head_dim));
-        for (head_idx, head_output) in head_outputs.iter().enumerate().take(self.num_heads) {
-            for seq_idx in 0..seq_len {
-                let row_idx = seq_idx * self.num_heads + head_idx;
+        let mut result = Array2::zeros((seq_len_new * num_heads, self.head_dim));
+        for (head_idx, head_output) in head_outputs.iter().enumerate() {
+            for seq_idx in 0..seq_len_new {
+                let row_idx = seq_idx * num_heads + head_idx;
                 result.row_mut(row_idx).assign(&head_output.row(seq_idx));
             }
         }
 
-        // 6. 合并所有头
         let combined = self.reverse_reshape_from_heads(&result);
-
-        // 7. 输出投影
         combined.dot(&self.w_o)
     }
 }
@@ -741,26 +756,94 @@ impl Layer for SelfAttention {
         let grad_attention_output = grads.dot(&self.w_o.t());
 
         // ========== 步骤2: 通过注意力机制反向传播 ==========
-        // 简化实现：直接将梯度传播回Q、K、V
-        // 完整实现需要通过softmax和矩阵乘法反向传播，但这里使用简化版本
+        let Some(weights_per_head) = self.cached_attention_weights.as_ref() else {
+            log::warn!("SelfAttention.backward 缺少注意力权重缓存，直接传递梯度");
+            return grad_attention_output;
+        };
 
-        // 对于 V: attention_output ≈ weights @ V
-        // grad_V = weights^T @ grad_attention_output
-        // 这里我们使用简化的近似，因为精确计算需要每个头的weights
-        let grad_v = &grad_attention_output;
+        let seq_len = input.nrows();
+        let num_heads = self.num_heads;
+        let head_dim = self.head_dim;
+        let sqrt_dk = (head_dim as f32).sqrt();
 
-        // 对于 Q 和 K，梯度通过 scores = Q @ K^T / sqrt(d_k) 传播
-        // 简化处理：假设梯度均匀分配
-        let grad_q = &grad_attention_output;
-        let grad_k = &grad_attention_output;
+        // 将梯度和缓存的 Q/K/V 重塑为多头格式
+        let grad_attention_view = grad_attention_output.view();
+        let grad_attention_heads = grad_attention_view
+            .to_shape((seq_len, num_heads, head_dim))
+            .expect("grad reshape failed")
+            .permuted_axes([1, 0, 2]);
+
+        let q_view = self.cached_q.as_ref().expect("缺少Q缓存").view();
+        let q_heads = q_view
+            .to_shape((seq_len, num_heads, head_dim))
+            .expect("q reshape failed")
+            .permuted_axes([1, 0, 2]);
+
+        let k_view = self.cached_k.as_ref().expect("缺少K缓存").view();
+        let k_heads = k_view
+            .to_shape((seq_len, num_heads, head_dim))
+            .expect("k reshape failed")
+            .permuted_axes([1, 0, 2]);
+
+        let v_view = self.cached_v.as_ref().expect("缺少V缓存").view();
+        let v_heads = v_view
+            .to_shape((seq_len, num_heads, head_dim))
+            .expect("v reshape failed")
+            .permuted_axes([1, 0, 2]);
+
+        let mut grad_q_total = Array2::zeros((seq_len, self.embedding_dim));
+        let mut grad_k_total = Array2::zeros((seq_len, self.embedding_dim));
+        let mut grad_v_total = Array2::zeros((seq_len, self.embedding_dim));
+
+        for head_idx in 0..num_heads {
+            let q_head = q_heads.slice(s![head_idx, .., ..]);
+            let k_head = k_heads.slice(s![head_idx, .., ..]);
+            let v_head = v_heads.slice(s![head_idx, .., ..]);
+            let grad_out_head = grad_attention_heads.slice(s![head_idx, .., ..]);
+            let weights = &weights_per_head[head_idx];
+
+            // 梯度 w.r.t. V
+            let mut grad_v_head = Array2::zeros((v_head.nrows(), v_head.ncols()));
+            general_mat_mul(1.0, &weights.t(), &grad_out_head, 0.0, &mut grad_v_head);
+
+            // 梯度 w.r.t. 权重（softmax输出）
+            let mut grad_weights = Array2::zeros((grad_out_head.nrows(), v_head.nrows()));
+            general_mat_mul(1.0, &grad_out_head, &v_head.t(), 0.0, &mut grad_weights);
+
+            let grad_scores = stable_softmax_gradient(weights, &grad_weights);
+
+            // 梯度 w.r.t. Q 和 K
+            let mut grad_q_head = Array2::zeros((q_head.nrows(), q_head.ncols()));
+            general_mat_mul(1.0 / sqrt_dk, &grad_scores, &k_head, 0.0, &mut grad_q_head);
+
+            let mut grad_k_head = Array2::zeros((k_head.nrows(), k_head.ncols()));
+            general_mat_mul(
+                1.0 / sqrt_dk,
+                &grad_scores.t(),
+                &q_head,
+                0.0,
+                &mut grad_k_head,
+            );
+
+            let start = head_idx * head_dim;
+            let end = start + head_dim;
+
+            grad_q_total
+                .slice_mut(s![.., start..end])
+                .assign(&grad_q_head);
+            grad_k_total
+                .slice_mut(s![.., start..end])
+                .assign(&grad_k_head);
+            grad_v_total
+                .slice_mut(s![.., start..end])
+                .assign(&grad_v_head);
+        }
 
         // ========== 步骤3: 计算W_q, W_k, W_v的梯度并更新 ==========
-        // Q = input @ W_q, 因此 grad_W_q = input^T @ grad_Q
-        let grad_w_q = input.t().dot(grad_q);
-        let grad_w_k = input.t().dot(grad_k);
-        let grad_w_v = input.t().dot(grad_v);
+        let grad_w_q = input.t().dot(&grad_q_total);
+        let grad_w_k = input.t().dot(&grad_k_total);
+        let grad_w_v = input.t().dot(&grad_v_total);
 
-        // 使用Adam优化器更新权重（可选冻结）
         if !self.freeze_updates {
             self.optimizer_w_o.step(&mut self.w_o, &grad_w_o, lr);
             self.optimizer_w_q.step(&mut self.w_q, &grad_w_q, lr);
@@ -769,11 +852,9 @@ impl Layer for SelfAttention {
         }
 
         // ========== 步骤4: 计算传播回输入的梯度 ==========
-        // input的梯度来自Q、K、V三条路径
-        // grad_input = grad_Q @ W_q^T + grad_K @ W_k^T + grad_V @ W_v^T
-        let grad_input_from_q = grad_q.dot(&self.w_q.t());
-        let grad_input_from_k = grad_k.dot(&self.w_k.t());
-        let grad_input_from_v = grad_v.dot(&self.w_v.t());
+        let grad_input_from_q = grad_q_total.dot(&self.w_q.t());
+        let grad_input_from_k = grad_k_total.dot(&self.w_k.t());
+        let grad_input_from_v = grad_v_total.dot(&self.w_v.t());
 
         grad_input_from_q + grad_input_from_k + grad_input_from_v
     }
