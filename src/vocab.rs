@@ -213,7 +213,7 @@ fn load_common_idioms_from_file() -> Result<HashSet<String>, Box<dyn std::error:
 ///
 /// ```rust
 /// use llm::Vocab;
-/// let training_texts = vec!["我爱人工智能", "深度学习"];
+/// let training_texts = vec!["我爱人工智能".to_string(), "深度学习".to_string()];
 /// let vocab = Vocab::build_from_texts(&training_texts);
 /// let token_ids = vocab.encode_sequence("我爱人工智能");
 /// let text = vocab.decode_sequence(&token_ids);
