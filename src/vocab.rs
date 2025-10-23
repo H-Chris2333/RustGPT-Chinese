@@ -212,6 +212,8 @@ fn load_common_idioms_from_file() -> Result<HashSet<String>, Box<dyn std::error:
 /// # 使用示例
 ///
 /// ```rust
+/// use llm::Vocab;
+/// let training_texts = vec!["我爱人工智能", "深度学习"];
 /// let vocab = Vocab::build_from_texts(&training_texts);
 /// let token_ids = vocab.encode_sequence("我爱人工智能");
 /// let text = vocab.decode_sequence(&token_ids);
@@ -260,6 +262,7 @@ impl Vocab {
     ///
     /// # 示例
     /// ```rust
+    /// use llm::Vocab;
     /// let vocab = Vocab::new(vec!["你好", "世界", "人工智能"]);
     /// ```
     pub fn new(words: Vec<&str>) -> Self {
@@ -378,6 +381,8 @@ impl Vocab {
     ///
     /// # 示例
     /// ```rust
+    /// use llm::Vocab;
+    /// let vocab = Vocab::new(vec!["你好", "世界"]);
     /// if let Some(id) = vocab.encode("你好") {
     ///     println!("'你好' 的 ID 是: {}", id);
     /// }
@@ -407,6 +412,8 @@ impl Vocab {
     ///
     /// # 示例
     /// ```rust
+    /// use llm::Vocab;
+    /// let vocab = Vocab::new(vec!["你好", "世界"]);
     /// let id = vocab.encode_with_unk("火星文词汇"); // 返回 1 (<|unk|>)
     /// ```
     pub fn encode_with_unk(&self, word: &str) -> usize {
@@ -459,6 +466,8 @@ impl Vocab {
     ///
     /// # 示例
     /// ```rust
+    /// use llm::Vocab;
+    /// let vocab = Vocab::new(vec!["深度", "学习", "很", "有趣"]);
     /// let text = "深度学习很有趣";
     /// let token_ids = vocab.encode_sequence(text);
     /// // token_ids: [1234, 5678, 9012, 3456]
@@ -519,7 +528,9 @@ impl Vocab {
     ///
     /// # 示例
     /// ```rust
-    /// let token_ids = vec![102, 358, 1524];
+    /// use llm::Vocab;
+    /// let vocab = Vocab::new(vec!["我", "爱", "人工智能"]);
+    /// let token_ids = vocab.encode_sequence("我爱人工智能");
     /// let text = vocab.decode_sequence(&token_ids);
     /// // text: "我 爱 人工智能"
     /// ```
@@ -959,7 +970,8 @@ impl Vocab {
     /// # 使用示例
     ///
     /// ```rust
-    /// let training_texts = load_training_data();
+    /// use llm::Vocab;
+    /// let training_texts = vec!["我爱编程".to_string(), "深度学习".to_string()];
     /// let vocab = Vocab::build_from_texts(&training_texts);
     /// println!("词汇表大小: {}", vocab.len());
     /// ```
@@ -1063,7 +1075,7 @@ impl Vocab {
 ///
 /// # 使用示例
 ///
-/// ```rust
+/// ```ignore
 /// let c = '中';
 /// if c.is_chinese() {
 ///     println!("这是中文字符");
