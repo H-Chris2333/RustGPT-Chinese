@@ -516,8 +516,9 @@ impl LLM {
     ///
     /// # 示例
     /// ```rust
+    /// use llm::LLM;
     /// // 500 epochs, 2次重启，每个周期约166 epochs
-    /// let lr = LLM::cosine_annealing_lr(0.001, epoch, 500, 2);
+    /// let lr = LLM::cosine_annealing_lr(0.001, 100, 500, 2);
     /// ```
     pub fn cosine_annealing_lr(
         initial_lr: f32,

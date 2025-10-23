@@ -139,7 +139,9 @@ pub const VOCAB_SIZE: usize = 30000;
 ///
 /// **典型应用**：
 /// ```rust
-/// let variance = calculate_variance(x);
+/// use llm::EPSILON;
+/// let x = 1.0f32;
+/// let variance = 0.5f32;
 /// let normalized = x / (variance + EPSILON).sqrt(); // 避免除以0
 /// ```
 pub const EPSILON: f32 = 1e-8;
@@ -151,6 +153,8 @@ pub const EPSILON: f32 = 1e-8;
 ///
 /// **应用场景**：
 /// ```rust
+/// use llm::LOG_EPSILON;
+/// let prob = 0.5f32;
 /// let loss = -prob.max(LOG_EPSILON).ln(); // 避免 log(0)
 /// ```
 ///
@@ -166,8 +170,9 @@ pub const LOG_EPSILON: f32 = 1e-10;
 ///
 /// **应用示例**：
 /// ```rust
-/// let probs = softmax(logits);
-/// let stable_probs = probs.mapv(|p| p.max(SOFTMAX_EPSILON)); // 确保概率>0
+/// use llm::SOFTMAX_EPSILON;
+/// let prob = 0.001f32;
+/// let stable_prob = prob.max(SOFTMAX_EPSILON); // 确保概率>0
 /// ```
 ///
 /// **为什么是1e-12？**

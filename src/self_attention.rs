@@ -271,6 +271,7 @@ impl SelfAttention {
     ///
     /// # 示例
     /// ```rust
+    /// use llm::self_attention::SelfAttention;
     /// let attention = SelfAttention::new(512);
     /// // 创建 8 头注意力，每头 64 维
     /// assert_eq!(attention.num_heads, 8);

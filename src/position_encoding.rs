@@ -157,6 +157,8 @@ impl PositionEncoding {
     /// # 使用示例
     ///
     /// ```rust
+    /// use ndarray::Array2;
+    /// use llm::position_encoding::PositionEncoding;
     /// let mut embeddings = Array2::zeros((4, 512));  // 4个词的嵌入
     /// let pos_enc = PositionEncoding::new();
     /// pos_enc.apply_to_input(&mut embeddings);
