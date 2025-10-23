@@ -4,52 +4,61 @@
 
 ## 优化概览
 
-### 1. Dataset::new 去除双重 clone
+### 1. Dataset::new 去除冗余拷贝并专注 JSON
 **文件**: `src/dataset_loader.rs`
 
-**问题**: 
-原代码在 `Dataset::new` 中对 `Vec<String>` 进行了不必要的 clone 操作：
+**问题**:
+旧版本为了兼容 CSV，引入了 `DatasetType` 枚举并在加载后对数据进行了不必要的 `clone`：
 ```rust
-// 优化前
-let pretraining_data: Vec<String>;
-let chat_training_data: Vec<String>;
-match type_of_data {
-    DatasetType::CSV => {
-        pretraining_data = get_data_from_csv(pretraining_data_path);
-        chat_training_data = get_data_from_csv(chat_training_data_path);
-    }
-    DatasetType::JSON => {
-        pretraining_data = get_data_from_json(pretraining_data_path);
-        chat_training_data = get_data_from_json(chat_training_data_path);
-    }
+pub enum DatasetType {
+    JSON,
+    CSV,
 }
-Dataset {
-    pretraining_data: pretraining_data.clone(),  // 不必要的 clone
-    chat_training_data: chat_training_data.clone(),  // 不必要的 clone
+
+impl Dataset {
+    pub fn new(
+        pretraining_data_path: String,
+        chat_training_data_path: String,
+        type_of_data: DatasetType,
+    ) -> Self {
+        let pretraining_data = match type_of_data {
+            DatasetType::CSV => get_data_from_csv(pretraining_data_path.clone()),
+            DatasetType::JSON => get_data_from_json(pretraining_data_path.clone()),
+        };
+
+        let chat_training_data = match type_of_data {
+            DatasetType::CSV => get_data_from_csv(chat_training_data_path),
+            DatasetType::JSON => get_data_from_json(chat_training_data_path),
+        };
+
+        Dataset {
+            pretraining_data: pretraining_data.clone(),
+            chat_training_data: chat_training_data.clone(),
+        }
+    }
 }
 ```
 
 **优化**:
-直接返回所有权，避免拷贝：
+移除 CSV 分支后，构造函数可以直接加载 JSON 并返回所有权：
 ```rust
-// 优化后
-let pretraining_data = match type_of_data {
-    DatasetType::CSV => get_data_from_csv(pretraining_data_path.clone()),
-    DatasetType::JSON => get_data_from_json(pretraining_data_path.clone()),
-};
-let chat_training_data = match type_of_data {
-    DatasetType::CSV => get_data_from_csv(chat_training_data_path),
-    DatasetType::JSON => get_data_from_json(chat_training_data_path),
-};
-Dataset {
-    pretraining_data,      // 直接移动所有权
-    chat_training_data,     // 直接移动所有权
+impl Dataset {
+    pub fn new(pretraining_data_path: String, chat_training_data_path: String) -> Self {
+        let pretraining_data = get_data_from_json(&pretraining_data_path);
+        let chat_training_data = get_data_from_json(&chat_training_data_path);
+
+        Dataset {
+            pretraining_data,
+            chat_training_data,
+        }
+    }
 }
 ```
 
-**效果**: 
-- 避免 2 次完整的 `Vec<String>` 深拷贝
-- 对于包含 200-500 条训练数据的数据集，每条平均 50 字符，节省约 20-50 KB 内存分配
+**效果**:
+- 避免两次 `Vec<String>` 深拷贝
+- 减少路径字符串 clone
+- 数据加载逻辑专注于 JSON，更易维护
 
 ---
 
