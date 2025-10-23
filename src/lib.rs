@@ -66,6 +66,7 @@ pub use model_serialization::{
 pub use output_projection::OutputProjection;
 pub use performance_monitor::PerformanceMonitor;
 pub use transformer::TransformerBlock;
+pub use utils::sample_normal;
 pub use vocab::Vocab;
 
 // ============================================================================

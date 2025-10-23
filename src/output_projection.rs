@@ -34,10 +34,8 @@
 //! - **本项目**: 未实现权重共享（教育目的，保持独立性）
 
 use ndarray::{Array2, Axis};
-use rand::Rng;
-use rand_distr::{Distribution, Normal};
 
-use crate::{adam::Adam, llm::Layer};
+use crate::{adam::Adam, llm::Layer, utils::sample_normal};
 
 /// **输出投影层结构体**
 pub struct OutputProjection {
@@ -78,14 +76,10 @@ impl OutputProjection {
         let mut rng = rand::rng();
         // He 初始化：std = sqrt(2 / fan_in)
         let std = (2.0 / embedding_dim as f32).sqrt();
-        let normal_ok = Normal::new(0.0, std).ok();
 
-        let w_out = if let Some(normal) = normal_ok {
-            Array2::from_shape_fn((embedding_dim, vocab_size), |_| normal.sample(&mut rng))
-        } else {
-            log::warn!("OutputProjection: 正态分布初始化失败，W_out改用均匀分布");
-            Array2::from_shape_fn((embedding_dim, vocab_size), |_| rng.random_range(-std..std))
-        };
+        let w_out = Array2::from_shape_fn((embedding_dim, vocab_size), |_| {
+            sample_normal(&mut rng, 0.0, std)
+        });
 
         OutputProjection {
             w_out,

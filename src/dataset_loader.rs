@@ -1,5 +1,6 @@
 use std::fs;
 
+#[cfg(feature = "csv-support")]
 use csv::ReaderBuilder;
 
 pub struct Dataset {
@@ -54,6 +55,7 @@ fn get_data_from_json(path: String) -> Vec<String> {
     }
 }
 
+#[cfg(feature = "csv-support")]
 fn get_data_from_csv(path: String) -> Vec<String> {
     // convert csv file to Vec<String>
     let file = match fs::File::open(&path) {
@@ -78,4 +80,13 @@ fn get_data_from_csv(path: String) -> Vec<String> {
         }
     }
     data
+}
+
+#[cfg(not(feature = "csv-support"))]
+fn get_data_from_csv(path: String) -> Vec<String> {
+    log::warn!(
+        "CSV support is not enabled. Please enable the 'csv-support' feature to use CSV files: {}",
+        path
+    );
+    Vec::new()
 }

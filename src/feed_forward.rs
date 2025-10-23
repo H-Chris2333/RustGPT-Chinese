@@ -37,10 +37,8 @@
 //! - 这种设计有助于模型学习抽象的、压缩的特征表示
 
 use ndarray::{Array2, Axis};
-use rand::Rng;
-use rand_distr::{Distribution, Normal};
 
-use crate::{adam::Adam, llm::Layer};
+use crate::{adam::Adam, llm::Layer, utils::sample_normal};
 
 /// **前馈神经网络结构体**
 pub struct FeedForward {
@@ -109,28 +107,17 @@ impl FeedForward {
 
         // He 初始化 W₁
         let std_w1 = (2.0 / embedding_dim as f32).sqrt();
-        let normal_w1 = Normal::new(0.0, std_w1).ok();
 
         // He 初始化 W₂
         let std_w2 = (2.0 / hidden_dim as f32).sqrt();
-        let normal_w2 = Normal::new(0.0, std_w2).ok();
 
-        let w1 = if let Some(normal) = normal_w1 {
-            Array2::from_shape_fn((embedding_dim, hidden_dim), |_| normal.sample(&mut rng))
-        } else {
-            log::warn!("FeedForward: 正态分布初始化失败，W1改用均匀分布");
-            Array2::from_shape_fn((embedding_dim, hidden_dim), |_| {
-                rng.random_range(-std_w1..std_w1)
-            })
-        };
-        let w2 = if let Some(normal) = normal_w2 {
-            Array2::from_shape_fn((hidden_dim, embedding_dim), |_| normal.sample(&mut rng))
-        } else {
-            log::warn!("FeedForward: 正态分布初始化失败，W2改用均匀分布");
-            Array2::from_shape_fn((hidden_dim, embedding_dim), |_| {
-                rng.random_range(-std_w2..std_w2)
-            })
-        };
+        let w1 = Array2::from_shape_fn((embedding_dim, hidden_dim), |_| {
+            sample_normal(&mut rng, 0.0, std_w1)
+        });
+
+        let w2 = Array2::from_shape_fn((hidden_dim, embedding_dim), |_| {
+            sample_normal(&mut rng, 0.0, std_w2)
+        });
 
         FeedForward {
             w1,
@@ -204,7 +191,7 @@ impl Layer for FeedForward {
         // ========== 反向传播 ReLU 激活函数 ==========
         // ReLU 的导数：x > 0 ? 1 : 0
         let mut relu_grad = hidden_pre_activation.clone();
-        relu_grad.par_map_inplace(|x| {
+        relu_grad.map_inplace(|x| {
             *x = if *x > 0.0 { 1.0 } else { 0.0 };
         });
 
@@ -254,7 +241,7 @@ impl Layer for FeedForward {
 
         // ReLU 激活：max(0, x)
         let mut hidden_post_activation = hidden_pre_activation.clone();
-        hidden_post_activation.par_map_inplace(|x| {
+        hidden_post_activation.map_inplace(|x| {
             *x = x.max(0.0);
         });
 
