@@ -330,6 +330,7 @@ impl SerializableLayer {
             kv_cache: None,      // KV缓存初始化为None
             use_kv_cache: false, // 默认不使用KV缓存
             freeze_updates: false,
+            causal_mask_cache: std::collections::HashMap::new(), // 初始化掩码缓存
             optimizer_w_q: s.optimizer_w_q.to_adam(),
             optimizer_w_k: s.optimizer_w_k.to_adam(),
             optimizer_w_v: s.optimizer_w_v.to_adam(),
