@@ -2,9 +2,9 @@ use std::io::Write;
 
 // 从lib.rs导入所有需要的类型和常量
 use llm::{
-    Dataset, EMBEDDING_DIM, Embeddings, HIDDEN_DIM, LLM, MAX_SEQ_LEN, OutputProjection,
-    PerformanceMonitor, TransformerBlock, Vocab, load_model_binary, save_model_binary,
-    save_model_json,
+    CheckpointManager, CheckpointStrategy, Dataset, EMBEDDING_DIM, Embeddings, HIDDEN_DIM, LLM,
+    MAX_SEQ_LEN, OutputProjection, PerformanceMonitor, TransformerBlock, Vocab, load_model_binary,
+    save_model_binary, save_model_json,
 };
 
 // 🔥 导入训练性能优化模块
@@ -33,6 +33,16 @@ fn parse_f32_arg(args: &[String], key: &str) -> Option<f32> {
             if let Ok(v) = a[prefix.len()..].parse::<f32>() {
                 return Some(v);
             }
+        }
+    }
+    None
+}
+
+fn parse_string_arg(args: &[String], key: &str) -> Option<String> {
+    let prefix = format!("{}=", key);
+    for a in args {
+        if a.starts_with(&prefix) {
+            return Some(a[prefix.len()..].to_string());
         }
     }
     None
@@ -142,6 +152,131 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let freeze_attn = arg_has_flag(&args, "--freeze-attn");
     let no_interactive = arg_has_flag(&args, "--no-interactive");
+
+    // 🔄 Resume 训练入口：从检查点恢复训练
+    if arg_has_flag(&args, "--resume") {
+        let checkpoint_path = parse_string_arg(&args, "--resume-from").or_else(|| {
+            // 如果未指定路径，尝试加载最佳或最新检查点
+            let checkpoint_dir = parse_string_arg(&args, "--checkpoint-dir")
+                .unwrap_or_else(|| "checkpoints".to_string());
+
+            if let Ok(manager) =
+                CheckpointManager::new(&checkpoint_dir, CheckpointStrategy::Best, 3)
+            {
+                if let Some(best) = manager.get_best_checkpoint() {
+                    return Some(best.to_string_lossy().to_string());
+                }
+                if let Some(last) = manager.get_last_checkpoint() {
+                    return Some(last.to_string_lossy().to_string());
+                }
+            }
+            None
+        });
+
+        if let Some(path) = checkpoint_path {
+            println!("\n🔄 从检查点恢复训练: {}", path);
+            match CheckpointManager::load_checkpoint(&path) {
+                Ok((mut llm, metadata)) => {
+                    println!("\n✅ 检查点加载成功!");
+                    println!("   • 训练阶段: {}", metadata.phase);
+                    println!("   • Epoch: {}", metadata.epoch);
+                    println!("   • Loss: {:.4}", metadata.loss);
+                    println!("   • 学习率: {:.6}", metadata.learning_rate);
+                    println!("   • 时间戳: {}", metadata.timestamp);
+                    println!("   • 词汇量: {}", llm.vocab.len());
+                    println!("   • 总参数: {}", llm.total_parameters());
+
+                    // 加载训练数据
+                    perf_monitor.start("加载训练数据");
+                    let dataset = Dataset::new(
+                        String::from("data/pretraining_data.json"),
+                        String::from("data/chat_training_data.json"),
+                    );
+                    perf_monitor.stop("加载训练数据");
+
+                    // 准备继续训练
+                    let resume_epochs = parse_usize_arg(&args, "--epochs").unwrap_or(500);
+                    let lr = parse_f32_arg(&args, "--lr").unwrap_or(metadata.learning_rate);
+                    let patience = parse_usize_arg(&args, "--patience").unwrap_or(30);
+                    let checkpoint_dir = parse_string_arg(&args, "--checkpoint-dir")
+                        .unwrap_or_else(|| "checkpoints".to_string());
+
+                    let mut checkpoint_manager =
+                        CheckpointManager::new(&checkpoint_dir, CheckpointStrategy::BestAndLast, 3)
+                            .expect("无法创建检查点管理器");
+
+                    // 根据阶段决定继续训练哪个阶段
+                    let phase = if metadata.phase == "pretraining" {
+                        "pretraining"
+                    } else {
+                        "instruction_tuning"
+                    };
+
+                    println!(
+                        "\n▶️  继续{}训练 (从epoch {} 开始)",
+                        phase,
+                        metadata.epoch + 1
+                    );
+                    println!("   • 最大epochs: {}", resume_epochs);
+                    println!("   • 学习率: {:.6}", lr);
+                    println!("   • 早停patience: {}", patience);
+                    println!("   • 检查点目录: {}\n", checkpoint_dir);
+
+                    // 准备tokenized数据
+                    let data = if phase == "pretraining" {
+                        &dataset.pretraining_data
+                    } else {
+                        &dataset.chat_training_data
+                    };
+
+                    perf_monitor.start("Tokenize训练数据");
+                    let tokenized_data: Vec<Vec<usize>> = data
+                        .iter()
+                        .map(|text| LLM::tokenize_with_vocab(&llm.vocab, text))
+                        .collect();
+                    perf_monitor.stop("Tokenize训练数据");
+
+                    // 继续训练
+                    perf_monitor.start(&format!("Resume {} 训练", phase));
+                    let actual_epochs = llm.train_with_checkpointing(
+                        tokenized_data,
+                        resume_epochs,
+                        lr,
+                        patience,
+                        Some(&mut checkpoint_manager),
+                        phase,
+                        metadata.epoch + 1,
+                    );
+                    perf_monitor.stop(&format!("Resume {} 训练", phase));
+
+                    println!("\n✓ Resume训练完成，实际训练到 epoch {}", actual_epochs);
+
+                    // 保存最终模型
+                    println!("\n💾 保存最终模型...");
+                    if let Err(e) = save_model_binary(&llm, "checkpoints/model_final.bin") {
+                        log::error!("保存模型失败: {}", e);
+                    } else {
+                        println!("✅ 模型已保存到 checkpoints/model_final.bin");
+                    }
+
+                    perf_monitor.stop("程序总执行时间");
+                    perf_monitor.print_report();
+
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("\n❌ 加载检查点失败: {}", e);
+                    eprintln!("请检查检查点文件是否存在且格式正确");
+                    return;
+                }
+            }
+        } else {
+            eprintln!("\n❌ 未找到可用的检查点");
+            eprintln!("请使用 --resume-from=<path> 指定检查点路径");
+            eprintln!("或确保检查点目录存在有效的检查点文件");
+            return;
+        }
+    }
 
     // 快速预训练入口：仅运行预训练，适合自动化验证
     if arg_has_flag(&args, "--quick") {

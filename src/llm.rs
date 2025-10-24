@@ -543,7 +543,7 @@ impl LLM {
     }
 
     /// 计算梯度L2范数
-    fn compute_grad_norm(grads: &Array2<f32>) -> f32 {
+    pub fn compute_grad_norm(grads: &Array2<f32>) -> f32 {
         grads.iter().map(|&x| x * x).sum::<f32>().sqrt()
     }
 
@@ -869,7 +869,7 @@ impl LLM {
         }
     }
 
-    fn tokenize_with_vocab(vocab: &Vocab, text: &str) -> Vec<usize> {
+    pub fn tokenize_with_vocab(vocab: &Vocab, text: &str) -> Vec<usize> {
         let has_chinese = text
             .chars()
             .any(|c| (c as u32) >= 0x4E00 && (c as u32) <= 0x9FFF);
@@ -1307,7 +1307,23 @@ impl LLM {
         loss / n_targets
     }
 
-    fn compute_gradients_step(probs: &Array2<f32>, target: &[usize]) -> Array2<f32> {
+    /// 计算交叉熵损失（从softmax概率）
+    pub fn cross_entropy_loss_step(probs: &Array2<f32>, target: &[usize]) -> f32 {
+        use crate::LOG_EPSILON;
+        let mut loss = 0.0;
+        let n_targets = target.len() as f32;
+
+        for (row_idx, &target_idx) in target.iter().enumerate() {
+            if target_idx < probs.shape()[1] {
+                let prob = probs[[row_idx, target_idx]].max(LOG_EPSILON);
+                loss -= prob.ln();
+            }
+        }
+
+        loss / n_targets
+    }
+
+    pub fn compute_gradients_step(probs: &Array2<f32>, target: &[usize]) -> Array2<f32> {
         let mut grads = probs.clone(); // softmax - one_hot(target)
 
         if probs.shape()[0] != target.len() {
@@ -1329,7 +1345,7 @@ impl LLM {
         grads
     }
 
-    fn clip_gradients(grads: &mut Array2<f32>, max_norm: f32) {
+    pub fn clip_gradients(grads: &mut Array2<f32>, max_norm: f32) {
         // 计算L2范数并裁剪
         let norm = grads.iter().map(|&x| x * x).sum::<f32>().sqrt();
         if norm > max_norm {
