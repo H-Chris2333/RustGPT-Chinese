@@ -38,6 +38,7 @@
 // ============================================================================
 
 pub mod adam; // Adam 优化器：带动量的自适应学习率优化算法
+pub mod checkpoint_manager; // 检查点管理器：保存和加载训练状态
 pub mod dataset_loader; // 数据加载器：处理预训练和对话数据
 pub mod dropout; // Dropout层：随机丢弃神经元，防止过拟合
 pub mod embeddings; // 嵌入层：将token ID转换为稠密向量表示
@@ -49,6 +50,7 @@ pub mod output_projection; // 输出投影层：将隐藏状态映射到词汇�
 pub mod performance_monitor;
 pub mod position_encoding; // 位置编码：为序列注入位置信息
 pub mod self_attention; // 自注意力机制：Transformer的核心组件
+pub mod training_optimizations; // 训练优化：缓存、学习率调度、早停等
 pub mod transformer; // Transformer块：注意力+前馈的完整模块
 pub mod utils; // 工具函数：通用辅助函数
 pub mod vocab; // 词汇表：管理token和ID的映射关系 // 性能监控：记录和分析训练/推理性能
@@ -57,6 +59,7 @@ pub mod vocab; // 词汇表：管理token和ID的映射关系 // 性能监控：
 // 重导出核心类型（简化外部使用）
 // ============================================================================
 
+pub use checkpoint_manager::{CheckpointManager, CheckpointMetadata, CheckpointStrategy};
 pub use dataset_loader::Dataset;
 pub use embeddings::Embeddings;
 pub use llm::{LLM, Layer};
