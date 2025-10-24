@@ -31,6 +31,14 @@
 
 ## 🆕 最近更新
 
+### v0.4.0 - 检查点管理与训练恢复 (2025-10-XX)
+- 🚀 **检查点管理器** - 支持Best/Last/周期性保存策略
+- ✅ **完整状态保存** - 模型参数 + Adam优化器状态（m, v, timestep）
+- ✅ **早停集成** - 自动保存最佳检查点，支持回滚到最佳状态
+- ✅ **Resume训练** - 从检查点恢复训练，支持中断续训
+- ✅ **CLI参数支持** - `--resume`, `--resume-from`, `--checkpoint-dir`
+- ✅ **集成测试** - 验证保存/恢复后loss连续性
+
 ### v0.3.1 - 训练性能优化 (2025-10-16)
 - 🚀 **阶段1训练优化** - 训练时间减少40%，收敛质量提升30%
 - ✅ **数据预处理缓存** - 避免重复tokenization，优化20-30%
@@ -148,10 +156,62 @@ cargo run
 
 # 模型将：
 # 1. 从中文训练数据构建词汇表（使用jieba-rs分词）
-# 2. 在中文事实陈述上进行预训练（100 轮）
-# 3. 在中文对话数据上进行指令微调（100 轮）
-# 4. 进入中文交互模式进行测试
+# 2. 在中文事实陈述上进行预训练（500 轮，带早停）
+# 3. 在中文对话数据上进行指令微调（500 轮，带早停）
+# 4. 自动保存检查点（最佳模型 + 最新模型）
+# 5. 进入中文交互模式进行测试
 ```
+
+### 📦 检查点管理和Resume训练
+
+```bash
+# 正常训练（自动保存检查点）
+cargo run
+
+# 从检查点恢复训练（自动查找最佳或最新检查点）
+cargo run -- --resume
+
+# 从指定检查点恢复训练
+cargo run -- --resume --resume-from=checkpoints/checkpoint_best_epoch_50_loss_2.3456.bin
+
+# 自定义resume参数
+cargo run -- --resume --epochs=1000 --lr=0.0001 --patience=50 --checkpoint-dir=my_checkpoints
+
+# 快速测试模式（仅预训练，无检查点）
+cargo run -- --quick --pretrain-epochs=30 --lr=0.0001 --patience=10
+```
+
+### 🎯 命令行参数说明
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--resume` | 启用resume训练模式 | - |
+| `--resume-from=<path>` | 指定检查点文件路径 | 自动查找 |
+| `--checkpoint-dir=<dir>` | 检查点保存/加载目录 | `checkpoints` |
+| `--epochs=<n>` | 训练的最大epoch数 | 500 |
+| `--lr=<f>` | 学习率 | 从检查点继承 |
+| `--patience=<n>` | 早停patience | 30 |
+| `--quick` | 快速测试模式（仅预训练） | - |
+| `--pretrain-epochs=<n>` | 预训练epoch数 | 30 |
+| `--freeze-attn` | 冻结注意力层参数更新 | - |
+| `--no-interactive` | 跳过交互模式 | - |
+
+### 💾 检查点文件结构
+
+```
+checkpoints/
+├── checkpoint_best_epoch_42_loss_2.1234.bin    # 最佳模型检查点
+├── checkpoint_best_epoch_42_loss_2.1234.json   # 元数据（可读）
+├── checkpoint_last.bin                          # 最新模型检查点
+├── checkpoint_last.json                         # 元数据（可读）
+└── model_final.bin                              # 训练完成后的最终模型
+```
+
+检查点包含：
+- ✅ **模型参数**：所有层的权重和偏置
+- ✅ **Adam优化器状态**：一阶矩m、二阶矩v、timestep
+- ✅ **训练元数据**：epoch、loss、学习率、时间戳、训练阶段
+- ✅ **词汇表**：完整的token到ID映射
 
 ## 🎮 交互模式
 

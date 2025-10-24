@@ -1,20 +1,31 @@
 [package]
 name = "llm"
-version = "0.3.1"
+version = "0.4.0"
 # 2024 = latest edition
 edition = "2024"
 
 [dependencies]
 bincode = "2.0.1"
+chrono = "0.4"
 jieba-rs = "0.7"
-# 移除 rayon feature 以减少编译时间和二进制大小（小模型不需要并行计算）
+# ndarray with optional BLAS support for tensor acceleration
+# Use "cargo build --features blas" to enable BLAS acceleration
 ndarray = "0.16.1"
+# OpenBLAS backend (optional, requires system OpenBLAS installation)
+blas-src = { version = "0.10", features = ["openblas"], optional = true }
+openblas-src = { version = "0.10", features = ["cblas", "system"], optional = true }
+# LRU cache for tokenizer optimization
+lru = "0.12"
 rand = "0.9.2"
 regex = "1.10.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 log = "0.4"
 simple_logger = "4.3"
+
+[features]
+default = []
+blas = ["dep:blas-src", "dep:openblas-src", "ndarray/blas"]
 
 
 [dev-dependencies]
@@ -38,4 +49,9 @@ path = "src/main.rs"
 [[bench]]
 name = "memory_optimization_bench"
 path = "benches/memory_optimization_bench.rs"
+harness = false
+
+[[bench]]
+name = "performance_benchmark"
+path = "benches/performance_benchmark.rs"
 harness = false
