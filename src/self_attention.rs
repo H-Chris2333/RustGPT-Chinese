@@ -88,7 +88,7 @@
 use std::collections::HashMap;
 use std::f32;
 
-use ndarray::{s, Array2, ArrayView2, Axis};
+use ndarray::{s, Array1, Array2, ArrayView2, Axis};
 use ndarray::linalg::general_mat_mul;
 
 use crate::{adam::Adam, llm::Layer, utils::sample_normal, EMBEDDING_DIM};
