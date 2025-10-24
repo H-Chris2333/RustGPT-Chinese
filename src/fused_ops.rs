@@ -32,7 +32,7 @@
 //! use llm::fused_ops::FusedLayerNormLinear;
 //! use ndarray::Array2;
 //!
-//! let fused_op = FusedLayerNormLinear::new(512, 1024);
+//! let mut fused_op = FusedLayerNormLinear::new(512, 1024);
 //! let input = Array2::zeros((10, 512));
 //! let output = fused_op.forward(&input);
 //! // output shape: (10, 1024)
