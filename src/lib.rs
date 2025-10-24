@@ -43,6 +43,7 @@ pub mod dataset_loader; // 数据加载器：处理预训练和对话数据
 pub mod dropout; // Dropout层：随机丢弃神经元，防止过拟合
 pub mod embeddings; // 嵌入层：将token ID转换为稠密向量表示
 pub mod feed_forward; // 前馈网络：Transformer中的全连接层部分
+pub mod fused_ops; // 算子融合：LayerNorm+Linear、GELU+Linear等融合操作
 pub mod layer_norm; // 层归一化：稳定训练的归一化技术
 pub mod llm; // 语言模型主类：整合所有组件的核心模型
 pub mod model_serialization; // 模型序列化：保存和加载模型权重

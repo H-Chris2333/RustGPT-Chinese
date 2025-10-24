@@ -100,14 +100,16 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use bincode::{Decode, Encode};
 use jieba_rs::Jieba;
+use lru::LruCache;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use std::fs;
+use std::num::NonZeroUsize;
 
 /// **全局成语集合**
 ///
@@ -124,6 +126,60 @@ static COMMON_IDIOM_SET: OnceLock<HashSet<String>> = OnceLock::new();
 /// - **内存优势**：共享词典数据结构
 /// - **线程安全**：`OnceLock` 保证只初始化一次
 static JIEBA_INSTANCE: OnceLock<Jieba> = OnceLock::new();
+
+/// **全局分词缓存（LRU Cache）**
+///
+/// 缓存分词结果以避免对相同文本重复分词：
+/// - **容量**: 10000 个条目（可缓存约 10,000 个不同的句子）
+/// - **策略**: LRU（Least Recently Used）淘汰最久未使用的条目
+/// - **线程安全**: 使用 `Mutex` 保护并发访问
+/// - **性能提升**: 避免重复 jieba 分词计算，显著加速常见句子的处理
+///
+/// **典型使用场景**：
+/// - 训练时重复的句子模板
+/// - 推理时的常用问候语和固定表达
+/// - 批量处理时的重复文本
+static TOKENIZER_CACHE: OnceLock<Mutex<LruCache<String, Vec<String>>>> = OnceLock::new();
+
+/// **分词缓存命中率统计**
+///
+/// 记录缓存命中和未命中次数，用于性能分析
+static CACHE_STATS: OnceLock<Mutex<(usize, usize)>> = OnceLock::new();
+
+/// **获取全局分词缓存**
+fn tokenizer_cache() -> &'static Mutex<LruCache<String, Vec<String>>> {
+    TOKENIZER_CACHE.get_or_init(|| {
+        let capacity = NonZeroUsize::new(10000).unwrap();
+        Mutex::new(LruCache::new(capacity))
+    })
+}
+
+/// **获取缓存统计**
+fn cache_stats() -> &'static Mutex<(usize, usize)> {
+    CACHE_STATS.get_or_init(|| Mutex::new((0, 0)))
+}
+
+/// **获取缓存命中率**
+///
+/// # 返回值
+/// (命中次数, 未命中次数, 命中率)
+pub fn get_cache_hit_rate() -> (usize, usize, f32) {
+    let stats = cache_stats().lock().unwrap();
+    let (hits, misses) = *stats;
+    let total = hits + misses;
+    let rate = if total > 0 {
+        hits as f32 / total as f32
+    } else {
+        0.0
+    };
+    (hits, misses, rate)
+}
+
+/// **重置缓存统计**
+pub fn reset_cache_stats() {
+    let mut stats = cache_stats().lock().unwrap();
+    *stats = (0, 0);
+}
 
 /// **获取全局成语集合**
 ///
@@ -438,9 +494,16 @@ impl Vocab {
         self.decode.get(&token_id)
     }
 
-    /// **编码文本序列**
+    /// **编码文本序列（带 LRU 缓存优化）**
     ///
     /// 将整段文本转换为 token ID 序列，这是模型输入的标准格式。
+    ///
+    /// # 优化策略（v0.4.0）
+    ///
+    /// **LRU 缓存**:
+    /// - 缓存 jieba 分词结果，避免对相同文本重复分词
+    /// - 容量：10,000 个条目
+    /// - 命中率监控：通过 `get_cache_hit_rate()` 查看性能
     ///
     /// # 算法流程
     ///
@@ -448,7 +511,9 @@ impl Vocab {
     /// 1. 检测语言（是否包含中文字符 0x4E00-0x9FFF）
     ///
     /// 2a. 如果是中文：
-    ///     - 使用 Jieba 分词: "我爱编程" → ["我", "爱", "编程"]
+    ///     - 查找缓存：如果命中则直接使用缓存的分词结果
+    ///     - 未命中时使用 Jieba 分词: "我爱编程" → ["我", "爱", "编程"]
+    ///     - 将分词结果存入缓存
     ///     - 查表映射: ["我", "爱", "编程"] → [102, 358, 456]
     ///
     /// 2b. 如果是英文：
@@ -481,8 +546,33 @@ impl Vocab {
             .any(|c| (c as u32) >= 0x4E00 && (c as u32) <= 0x9FFF);
 
         if has_chinese {
-            let jieba = jieba_instance(); // 使用全局实例
-            let seg_list = jieba.cut(text, false);
+            // 尝试从缓存获取分词结果
+            let seg_list = {
+                let mut cache = tokenizer_cache().lock().unwrap();
+                if let Some(cached_tokens) = cache.get(text) {
+                    // 缓存命中
+                    let mut stats = cache_stats().lock().unwrap();
+                    stats.0 += 1;
+                    cached_tokens.clone()
+                } else {
+                    // 缓存未命中，执行分词
+                    let mut stats = cache_stats().lock().unwrap();
+                    stats.1 += 1;
+                    drop(stats); // 释放锁
+
+                    let jieba = jieba_instance();
+                    let result: Vec<String> = jieba
+                        .cut(text, false)
+                        .into_iter()
+                        .map(|s| s.to_string())
+                        .collect();
+
+                    // 存入缓存
+                    cache.put(text.to_string(), result.clone());
+                    result
+                }
+            };
+
             for word in seg_list {
                 if !word.trim().is_empty() {
                     let token_id = self.encode_with_unk(word.trim());
