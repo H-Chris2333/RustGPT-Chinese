@@ -110,17 +110,20 @@ fn stable_softmax(logits: &Array2<f32>) -> Array2<f32> {
         let max_val = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
 
         // 计算 exp(x - max)
-        let mut exp_vals = row.mapv(|x| (x - max_val).exp());
+        let exp_vals = row.mapv(|x| (x - max_val).exp());
 
         // 计算归一化因子
         let sum_exp: f32 = exp_vals.sum();
 
-        // 归一化（添加小的epsilon避免除零）
-        if sum_exp > 1e-15 {
-            exp_vals.mapv_inplace(|x| x / sum_exp);
-        }
+        // 归一化（添加epsilon避免除零）
+        let normalized = if sum_exp > 1e-15 {
+            exp_vals.mapv(|x| x / sum_exp)
+        } else {
+            // 如果所有值都极小，返回均匀分布
+            Array1::from_elem(exp_vals.len(), 1.0 / exp_vals.len() as f32)
+        };
 
-        result.row_mut(i).assign(&exp_vals);
+        result.row_mut(i).assign(&normalized);
     }
 
     result
